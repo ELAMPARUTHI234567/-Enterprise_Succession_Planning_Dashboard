@@ -35,7 +35,7 @@ def create_app():
     origins = [o.strip() for o in Config.CORS_ORIGINS.split(',')] if Config.CORS_ORIGINS != "*" else "*"
     cors.init_app(app, resources={r"/api/*": {
         "origins": origins,
-        "allow_headers": ["Content-Type", "Authorization"],
+        "allow_headers": "*",
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     }})
 
