@@ -3,6 +3,10 @@ import axios from 'axios';
 const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 const API_BASE_URL = rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl.replace(/\/+$/, '')}/api`;
 
+if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'development')) {
+  console.log(`[API Service] Base URL: ${API_BASE_URL}`);
+}
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -25,6 +29,9 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (error.code === 'ERR_NETWORK' || !error.response) {
+      console.error(`[API Connection Failure] Unable to reach backend at: ${API_BASE_URL}. Target Endpoint: ${error.config?.url || 'unknown'}`);
+    }
     const message = error.response?.data?.message || error.message || 'An unexpected error occurred';
     return Promise.reject(new Error(message));
   }

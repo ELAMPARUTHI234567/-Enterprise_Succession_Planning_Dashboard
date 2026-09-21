@@ -33,7 +33,11 @@ def create_app():
 
     # Enable CORS
     origins = [o.strip() for o in Config.CORS_ORIGINS.split(',')] if Config.CORS_ORIGINS != "*" else "*"
-    cors.init_app(app, resources={r"/api/*": {"origins": origins}})
+    cors.init_app(app, resources={r"/api/*": {
+        "origins": origins,
+        "allow_headers": ["Content-Type", "Authorization"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    }})
 
     # Validate DATABASE_URL configuration
     if Config.HAS_PLACEHOLDER:
