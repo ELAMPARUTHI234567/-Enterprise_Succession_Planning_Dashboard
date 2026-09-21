@@ -12,6 +12,21 @@ from routes import (
     dashboard_bp, analytics_bp, ml_bp, reports_bp
 )
 
+def mask_db_uri(uri):
+    """Utility to mask credentials in database logs"""
+    if not uri:
+        return ""
+    try:
+        if "@" in uri and "://" in uri:
+            prefix, rest = uri.split("://", 1)
+            user_pass, host_db = rest.split("@", 1)
+            if ":" in user_pass:
+                user = user_pass.split(":")[0]
+                return f"{prefix}://{user}:****@{host_db}"
+        return uri
+    except Exception:
+        return "configured_db_uri"
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
@@ -23,28 +38,12 @@ def create_app():
     use_sqlite = os.getenv("USE_SQLITE", "false").lower() == "true"
     
     if not use_sqlite:
-        # Test MySQL / DATABASE_URL connection first
         try:
-            if Config.DATABASE_URL:
-                app.config["SQLALCHEMY_DATABASE_URI"] = Config.DATABASE_URL
-                print(f"[SUCCESS] Using production DATABASE_URL")
-            else:
-                import pymysql
-                conn = pymysql.connect(
-                    host=Config.DB_HOST,
-                    user=Config.DB_USER,
-                    password=Config.DB_PASSWORD,
-                    port=int(Config.DB_PORT),
-                    connect_timeout=2
-                )
-                # Create DB if not exists
-                with conn.cursor() as cursor:
-                    cursor.execute(f"CREATE DATABASE IF NOT EXISTS {Config.DB_NAME};")
-                conn.close()
-                print(f"[SUCCESS] Connected to MySQL server! Using database '{Config.DB_NAME}'")
-                app.config["SQLALCHEMY_DATABASE_URI"] = Config.MYSQL_DATABASE_URI
+            target_uri = Config.PRIMARY_DATABASE_URI
+            app.config["SQLALCHEMY_DATABASE_URI"] = target_uri
+            print(f"[INFO] Initializing PostgreSQL / Supabase database connection: {mask_db_uri(target_uri)}")
         except Exception as e:
-            print(f"[WARNING] Primary database connection failed ({str(e)}). Using SQLite database fallback...")
+            print(f"[WARNING] Primary database configuration error ({str(e)}). Using SQLite database fallback...")
             app.config["SQLALCHEMY_DATABASE_URI"] = Config.SQLITE_DATABASE_URI
     else:
         app.config["SQLALCHEMY_DATABASE_URI"] = Config.SQLITE_DATABASE_URI
@@ -53,10 +52,15 @@ def create_app():
     db.init_app(app)
 
     with app.app_context():
-        db.create_all()
-        seed_database_if_empty()
-
-    print(f"[SUCCESS] Database initialized with URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
+        try:
+            db.create_all()
+            seed_database_if_empty()
+            print(f"[SUCCESS] Database tables verified & seeded with URI: {mask_db_uri(app.config['SQLALCHEMY_DATABASE_URI'])}")
+        except Exception as e:
+            print(f"[WARNING] Primary database connection failed ({str(e)}). Switching to SQLite fallback...")
+            app.config["SQLALCHEMY_DATABASE_URI"] = Config.SQLITE_DATABASE_URI
+            db.create_all()
+            seed_database_if_empty()
 
     # Register API Blueprints
     app.register_blueprint(auth_bp, url_prefix='/api')
@@ -73,9 +77,17 @@ def create_app():
 
     @app.route('/api/health', methods=['GET'])
     def health_check():
+        db_status = "connected"
+        try:
+            with app.app_context():
+                db.session.execute(db.text("SELECT 1"))
+        except Exception:
+            db_status = "fallback"
+
         return jsonify({
             "status": "ok",
-            "message": "Enterprise Succession Planning API is running"
+            "message": "Enterprise Succession Planning API is running",
+            "database_status": db_status
         }), 200
 
     return app
@@ -90,4 +102,3 @@ if __name__ == '__main__':
     print(f" URL: http://localhost:{port}/api/health ")
     print(f"=======================================================\n")
     app.run(host='0.0.0.0', port=port, debug=debug_mode)
-
