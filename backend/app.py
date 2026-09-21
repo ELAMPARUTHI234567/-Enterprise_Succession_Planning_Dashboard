@@ -32,11 +32,15 @@ def create_app():
     app.config.from_object(Config)
 
     # Enable CORS
-    origins = [o.strip() for o in Config.CORS_ORIGINS.split(',')] if Config.CORS_ORIGINS != "*" else "*"
+    cors_origins = [o.strip() for o in Config.CORS_ORIGINS.split(',')] if Config.CORS_ORIGINS != "*" else "*"
+    if isinstance(cors_origins, list) and "https://enterprise-succession-dashboard.vercel.app" not in cors_origins:
+        cors_origins.append("https://enterprise-succession-dashboard.vercel.app")
+
     cors.init_app(app, resources={r"/api/*": {
-        "origins": origins,
+        "origins": cors_origins,
         "allow_headers": "*",
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "supports_credentials": True
     }})
 
     # Validate DATABASE_URL configuration
