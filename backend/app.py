@@ -41,13 +41,13 @@ def create_app():
             f"\n======================================================================\n"
             f"[CONFIGURATION ERROR] Invalid DATABASE_URL detected!\n"
             f"The environment variable DATABASE_URL contains placeholder text ('{Config.DETECTED_PLACEHOLDER}').\n"
-            f"Action Required: Set a valid Supabase PostgreSQL connection string in Render Environment Variables.\n"
+            f"Action Required: Configure the real Supabase PostgreSQL DATABASE_URL in Render Environment Variables.\n"
             f"Example format:\n"
             f"postgresql://postgres.[ref]:[password]@[host].pooler.supabase.com:5432/postgres\n"
             f"======================================================================\n"
         )
         print(err_msg, file=sys.stderr)
-        raise RuntimeError(f"Invalid DATABASE_URL: contains placeholder text '{Config.DETECTED_PLACEHOLDER}'. Configure valid connection string in Render environment variables.")
+        raise RuntimeError(f"Invalid DATABASE_URL: contains placeholder text '{Config.DETECTED_PLACEHOLDER}'. Configure the real Supabase PostgreSQL DATABASE_URL in Render Environment Variables.")
 
     if Config.IS_PRODUCTION:
         if not Config.VALID_DATABASE_URL:
@@ -56,11 +56,11 @@ def create_app():
                 f"[CONFIGURATION ERROR] Missing DATABASE_URL in Production!\n"
                 f"Production environment requires a valid DATABASE_URL (Supabase PostgreSQL using psycopg2).\n"
                 f"SQLite fallback is disabled in production.\n"
-                f"Please set DATABASE_URL in Render Environment Variables.\n"
+                f"Action Required: Configure the real Supabase PostgreSQL DATABASE_URL in Render Environment Variables.\n"
                 f"======================================================================\n"
             )
             print(err_msg, file=sys.stderr)
-            raise RuntimeError("Missing or unconfigured DATABASE_URL in production environment.")
+            raise RuntimeError("Missing or unconfigured DATABASE_URL in production environment. Configure the real Supabase PostgreSQL DATABASE_URL in Render Environment Variables.")
         
         app.config["SQLALCHEMY_DATABASE_URI"] = Config.VALID_DATABASE_URL
         print(f"[SUCCESS] Production PostgreSQL configured: {mask_db_uri(Config.VALID_DATABASE_URL)}")
