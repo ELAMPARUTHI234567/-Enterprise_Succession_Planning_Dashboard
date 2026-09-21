@@ -31,6 +31,7 @@ api.interceptors.response.use(
   (error) => {
     if (error.code === 'ERR_NETWORK' || !error.response) {
       console.error(`[API Connection Failure] Unable to reach backend at: ${API_BASE_URL}. Target Endpoint: ${error.config?.url || 'unknown'}`);
+      return Promise.reject(new Error(`Network Error: Cannot connect to API at ${API_BASE_URL}`));
     }
     const message = error.response?.data?.message || error.message || 'An unexpected error occurred';
     return Promise.reject(new Error(message));
