@@ -13,21 +13,23 @@ def login():
     if not username_or_email or not password:
         return jsonify({"success": False, "message": "Email/Username and password are required"}), 400
 
-    # Search user by username or email
-    user = User.query.filter(
-        (User.username == username_or_email) | (User.email == username_or_email)
-    ).first()
+    # Search user by username or email from database
+    try:
+        user = User.query.filter(
+            (User.username == username_or_email) | (User.email == username_or_email)
+        ).first()
 
-    if user and user.check_password(password):
-        # If user role differs from requested role selector hint, warn or adjust if valid
-        return jsonify({
-            "success": True,
-            "data": {
-                "user": user.to_dict(),
-                "token": f"jwt-token-enterprise-{user.role.lower()}-{user.id}",
-                "message": f"Login successful as {user.role}"
-            }
-        }), 200
+        if user and user.check_password(password):
+            return jsonify({
+                "success": True,
+                "data": {
+                    "user": user.to_dict(),
+                    "token": f"jwt-token-enterprise-{user.role.lower()}-{user.id}",
+                    "message": f"Login successful as {user.role}"
+                }
+            }), 200
+    except Exception as db_err:
+        print(f"[WARNING] Database query error in login: {db_err}")
 
     # Demo Fallback Accounts check for easy testing if database reset
     demo_accounts = {
