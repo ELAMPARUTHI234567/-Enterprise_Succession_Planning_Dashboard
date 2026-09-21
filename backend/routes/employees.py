@@ -1,0 +1,160 @@
+from flask import Blueprint, request, jsonify
+from extensions import db
+from models.employee import Employee
+from models.employee_competency import EmployeeCompetency
+from models.competency import Competency
+from services.gap_service import calculate_competency_gaps
+from services.readiness_service import calculate_successor_readiness
+
+employees_bp = Blueprint('employees', __name__)
+
+@employees_bp.route('/employees', methods=['GET'])
+def get_employees():
+    search = request.args.get('search', '').strip()
+    department = request.args.get('department', '').strip()
+    manager_id = request.args.get('manager_id', type=int)
+    availability = request.args.get('availability', '').strip()
+
+    query = Employee.query
+
+    if search:
+        query = query.filter(
+            (Employee.name.ilike(f"%{search}%")) |
+            (Employee.employee_code.ilike(f"%{search}%")) |
+            (Employee.designation.ilike(f"%{search}%"))
+        )
+
+    if department and department != 'All':
+        query = query.filter(Employee.department == department)
+
+    if manager_id:
+        query = query.filter(Employee.manager_id == manager_id)
+
+    if availability and availability != 'All':
+        query = query.filter(Employee.availability_status == availability)
+
+    employees = query.order_by(Employee.id.asc()).all()
+    
+    emp_data = []
+    for emp in employees:
+        d = emp.to_dict()
+        readiness_info = calculate_successor_readiness(emp.id, 1)
+        d["readiness_score"] = readiness_info["readiness_score"] if readiness_info else 0.0
+        d["readiness_level"] = readiness_info["readiness_level"] if readiness_info else "Low"
+        emp_data.append(d)
+
+    return jsonify({"success": True, "data": emp_data}), 200
+
+@employees_bp.route('/employees/<int:emp_id>', methods=['GET'])
+def get_employee_detail(emp_id):
+    emp = Employee.query.get(emp_id)
+    if not emp:
+        return jsonify({"success": False, "message": "Employee not found"}), 404
+
+    emp_dict = emp.to_dict()
+
+    # Get employee competency scores
+    emp_comps = EmployeeCompetency.query.filter_by(employee_id=emp_id).all()
+    comp_list = []
+    for ec in emp_comps:
+        comp_list.append({
+            "competency_id": ec.competency_id,
+            "competency_name": ec.competency.name if ec.competency else "",
+            "score": ec.score
+        })
+    emp_dict["competencies"] = comp_list
+
+    # Default gap & readiness for default target role #1
+    target_role_id = request.args.get('role_id', 1, type=int)
+    gap_data = calculate_competency_gaps(emp_id, target_role_id)
+    readiness_data = calculate_successor_readiness(emp_id, target_role_id)
+
+    emp_dict["target_role_id"] = target_role_id
+    emp_dict["gap_analysis"] = gap_data
+    emp_dict["readiness"] = readiness_data
+
+    return jsonify({"success": True, "data": emp_dict}), 200
+
+@employees_bp.route('/employees', methods=['POST'])
+def create_employee():
+    data = request.get_json() or {}
+
+    code = data.get('employee_code', '').strip()
+    name = data.get('name', '').strip()
+    email = data.get('email', '').strip()
+    department = data.get('department', '').strip()
+    designation = data.get('designation', '').strip()
+    manager_id = data.get('manager_id')
+    experience = float(data.get('experience_years', 0.0))
+    performance = float(data.get('performance_score', 0.0))
+    leadership = float(data.get('leadership_score', 0.0))
+    availability = data.get('availability_status', 'Available').strip()
+
+    if not name or not email or not code:
+        return jsonify({"success": False, "message": "Name, email, and employee code are required"}), 400
+
+    if Employee.query.filter_by(email=email).first():
+        return jsonify({"success": False, "message": "An employee with this email already exists"}), 409
+
+    if Employee.query.filter_by(employee_code=code).first():
+        return jsonify({"success": False, "message": "An employee with this code already exists"}), 409
+
+    new_emp = Employee(
+        employee_code=code,
+        name=name,
+        email=email,
+        department=department,
+        designation=designation,
+        manager_id=manager_id,
+        experience_years=experience,
+        performance_score=performance,
+        leadership_score=leadership,
+        availability_status=availability
+    )
+    db.session.add(new_emp)
+    db.session.flush()
+
+    competencies = Competency.query.all()
+    for comp in competencies:
+        db.session.add(EmployeeCompetency(
+            employee_id=new_emp.id,
+            competency_id=comp.id,
+            score=70.0
+        ))
+
+    db.session.commit()
+
+    return jsonify({"success": True, "data": new_emp.to_dict(), "message": "Employee created successfully"}), 201
+
+@employees_bp.route('/employees/<int:emp_id>', methods=['PUT'])
+def update_employee(emp_id):
+    emp = Employee.query.get(emp_id)
+    if not emp:
+        return jsonify({"success": False, "message": "Employee not found"}), 404
+
+    data = request.get_json() or {}
+    
+    if 'name' in data: emp.name = data['name'].strip()
+    if 'email' in data: emp.email = data['email'].strip()
+    if 'department' in data: emp.department = data['department'].strip()
+    if 'designation' in data: emp.designation = data['designation'].strip()
+    if 'manager_id' in data: emp.manager_id = data['manager_id']
+    if 'experience_years' in data: emp.experience_years = float(data['experience_years'])
+    if 'performance_score' in data: emp.performance_score = float(data['performance_score'])
+    if 'leadership_score' in data: emp.leadership_score = float(data['leadership_score'])
+    if 'availability_status' in data: emp.availability_status = data['availability_status'].strip()
+
+    db.session.commit()
+
+    return jsonify({"success": True, "data": emp.to_dict(), "message": "Employee updated successfully"}), 200
+
+@employees_bp.route('/employees/<int:emp_id>', methods=['DELETE'])
+def delete_employee(emp_id):
+    emp = Employee.query.get(emp_id)
+    if not emp:
+        return jsonify({"success": False, "message": "Employee not found"}), 404
+
+    db.session.delete(emp)
+    db.session.commit()
+
+    return jsonify({"success": True, "message": "Employee deleted successfully"}), 200
