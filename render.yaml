@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: enterprise-succession-backend
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: USE_SQLITE
+        value: "false"
+      - key: AI_MODEL_PATH
+        value: ml/model.joblib
+
