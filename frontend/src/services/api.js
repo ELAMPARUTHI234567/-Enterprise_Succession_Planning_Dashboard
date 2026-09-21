@@ -29,12 +29,20 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
-    if (error.code === 'ERR_NETWORK' || !error.response) {
-      console.error(`[API Connection Failure] Unable to reach backend at: ${API_BASE_URL}. Target Endpoint: ${error.config?.url || 'unknown'}`);
-      return Promise.reject(new Error(`Network Error: Cannot connect to API at ${API_BASE_URL}`));
+    const status = error.response ? error.response.status : (error.request ? 'NO_RESPONSE' : 'REQUEST_SETUP_ERROR');
+    const responseData = error.response?.data?.message || error.response?.data?.error || null;
+    const errCode = error.code || 'UNKNOWN_CODE';
+    const errMessage = error.message || 'Unknown network error';
+
+    console.error(`[API Error Diagnostic] Status: ${status} | Code: ${errCode} | Message: ${errMessage} | Details: ${responseData || 'N/A'} | Target: ${API_BASE_URL}${error.config?.url || ''}`);
+
+    if (responseData) {
+      return Promise.reject(new Error(responseData));
     }
-    const message = error.response?.data?.message || error.message || 'An unexpected error occurred';
-    return Promise.reject(new Error(message));
+    if (error.code === 'ERR_NETWORK' || !error.response) {
+      return Promise.reject(new Error(`Network Error (${errCode}: ${errMessage}). Unable to reach API at ${API_BASE_URL}`));
+    }
+    return Promise.reject(new Error(errMessage));
   }
 );
 
