@@ -54,15 +54,15 @@ export const MainLayout = ({ children }) => {
     // Employee Role
     navItems = [
       { name: 'Dashboard', path: '/employee-dashboard', icon: LayoutDashboard },
-      { name: 'My Profile', path: '/employee-dashboard', icon: User },
-      { name: 'My Competencies', path: '/employee-dashboard', icon: Sliders },
-      { name: 'My Assessments', path: '/employee-dashboard', icon: CheckSquare },
-      { name: 'Assessment History', path: '/employee-dashboard', icon: Clock },
-      { name: 'My Results', path: '/employee-dashboard', icon: Award },
-      { name: 'Competency Gaps', path: '/employee-dashboard', icon: ShieldAlert },
-      { name: 'My Readiness', path: '/employee-dashboard', icon: TrendingUp },
-      { name: 'Development Plan', path: '/employee-dashboard', icon: FileText },
-      { name: 'Resources', path: '/employee-dashboard', icon: Sparkles },
+      { name: 'My Profile', path: '/my-profile', icon: User },
+      { name: 'My Competencies', path: '/my-competencies', icon: Sliders },
+      { name: 'My Assessments', path: '/my-assessments', icon: CheckSquare },
+      { name: 'Assessment History', path: '/assessment-history', icon: Clock },
+      { name: 'My Results', path: '/my-results', icon: Award },
+      { name: 'Competency Gaps', path: '/my-gaps', icon: ShieldAlert },
+      { name: 'My Readiness', path: '/my-readiness', icon: TrendingUp },
+      { name: 'Development Plan', path: '/my-development', icon: FileText },
+      { name: 'Resources', path: '/resources', icon: Sparkles },
     ];
   }
 
@@ -128,7 +128,7 @@ export const MainLayout = ({ children }) => {
           <nav className="p-3 space-y-1 overflow-y-auto max-h-[calc(100vh-250px)] scrollbar-thin">
             {navItems.map((item) => {
               const Icon = item.icon;
-              const isActive = location.pathname === item.path || (item.path !== '/dashboard' && item.path !== '/manager-dashboard' && item.path !== '/employee-dashboard' && location.pathname.startsWith(item.path));
+              const isActive = location.pathname === item.path;
               return (
                 <NavLink
                   key={item.name}

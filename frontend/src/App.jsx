@@ -128,14 +128,6 @@ export const App = () => {
           }
         />
         <Route
-          path="/my-assessments"
-          element={
-            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
-              <EmployeeDashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route
           path="/my-competencies"
           element={
             <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
@@ -144,7 +136,55 @@ export const App = () => {
           }
         />
         <Route
+          path="/my-assessments"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/assessment-history"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/my-results"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/my-gaps"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/my-readiness"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/my-development"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/resources"
           element={
             <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
               <EmployeeDashboard />
