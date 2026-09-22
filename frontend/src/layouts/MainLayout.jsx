@@ -4,7 +4,8 @@ import {
   LayoutDashboard, Users, Award, ShieldAlert,
   Sliders, UserCheck, TrendingUp, BarChart3,
   FileText, LogOut, Search, Bell, Menu, X, ChevronRight, User,
-  Sparkles, Briefcase, UserPlus, CheckSquare, Settings, Clock, Sprout
+  Sparkles, Briefcase, UserPlus, CheckSquare, Settings, Clock, Sprout,
+  Crown, ChevronsLeft
 } from 'lucide-react';
 import { authService } from '../services/api';
 
@@ -15,8 +16,8 @@ export const MainLayout = ({ children }) => {
 
   // Get current logged-in user from localStorage
   const userJson = localStorage.getItem('succession_user');
-  const user = userJson ? JSON.parse(userJson) : { name: 'Sarah Jenkins', role: 'HR', username: 'hr' };
-  const role = user.role || 'HR';
+  const user = userJson ? JSON.parse(userJson) : { name: 'Arun Kumar', role: 'Employee', username: 'arun.kumar' };
+  const role = user.role || 'Employee';
 
   const handleLogout = () => {
     authService.logout();
@@ -81,7 +82,7 @@ export const MainLayout = ({ children }) => {
 
       {/* Sidebar Navigation */}
       <aside
-        className={`fixed md:sticky top-0 left-0 z-50 h-screen w-64 bg-slate-900 text-white flex flex-col justify-between transition-transform duration-300 ${
+        className={`fixed md:sticky top-0 left-0 z-50 h-screen w-64 bg-slate-950 text-white flex flex-col justify-between border-r border-slate-800/80 transition-transform duration-300 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         }`}
       >
@@ -89,86 +90,75 @@ export const MainLayout = ({ children }) => {
           {/* Brand Logo & Title */}
           <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-xl shadow-lg shadow-indigo-500/30">
-                👑
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-blue-500 flex items-center justify-center shadow-lg shadow-indigo-600/30 text-amber-300 font-bold">
+                <Crown className="w-5 h-5 text-amber-300 fill-amber-300" />
               </div>
               <div>
-                <h1 className="font-extrabold text-sm tracking-tight text-white leading-none">ENTERPRISE</h1>
-                <p className="text-[10px] tracking-wider text-indigo-400 font-semibold uppercase mt-0.5">
-                  {role} Portal
+                <h1 className="font-extrabold text-sm tracking-wider text-white leading-tight">ENTERPRISE</h1>
+                <p className="text-[10px] tracking-wider text-indigo-400 font-extrabold uppercase">
+                  {role} PORTAL
                 </p>
               </div>
             </div>
             <button
               onClick={() => setSidebarOpen(false)}
-              className="md:hidden p-1 text-slate-400 hover:text-white"
+              className="p-1 text-slate-400 hover:text-white transition-colors"
             >
-              <X className="w-5 h-5" />
+              <ChevronsLeft className="w-5 h-5" />
             </button>
           </div>
 
-          {/* User Profile Pill in Sidebar */}
-          <div className="p-3.5 mx-3 my-3 bg-slate-800/60 rounded-xl border border-slate-800 flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-sm">
-              {user.name ? user.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase() : role.slice(0,2)}
+          {/* User Profile Badge Card in Sidebar */}
+          <div className="p-3.5 mx-3 my-3 bg-slate-900/80 rounded-2xl border border-slate-800/80 flex items-center space-x-3.5 shadow-sm">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-r from-violet-600 to-indigo-600 text-white flex items-center justify-center font-extrabold text-xs shadow-md shadow-indigo-600/20">
+              {user.name ? user.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase() : 'AK'}
             </div>
             <div className="overflow-hidden text-left">
-              <p className="text-xs font-bold text-slate-200 truncate">{user.name || user.username}</p>
-              <div className="flex items-center space-x-1 mt-0.5">
-                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase">
-                  {role}
+              <p className="text-xs font-extrabold text-white truncate">{user.name || user.username || 'Arun Kumar'}</p>
+              <div className="flex items-center space-x-1.5 mt-0.5">
+                <span className="text-[9px] font-extrabold px-2 py-0.5 rounded bg-indigo-900/80 text-indigo-300 border border-indigo-700/60 uppercase">
+                  {role.toUpperCase()}
                 </span>
-                <span className="text-[10px] text-slate-400 truncate">{user.department || 'Enterprise'}</span>
+                <span className="text-[11px] text-slate-400 font-medium truncate">{user.department || 'Enterprise'}</span>
               </div>
             </div>
           </div>
 
           {/* Navigation Links */}
-          <nav className="p-3 space-y-1 overflow-y-auto max-h-[calc(100vh-230px)] scrollbar-thin">
+          <nav className="p-3 space-y-1 overflow-y-auto max-h-[calc(100vh-250px)] scrollbar-thin">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path || (item.path !== '/dashboard' && item.path !== '/manager-dashboard' && item.path !== '/employee-dashboard' && location.pathname.startsWith(item.path));
               return (
                 <NavLink
-                  key={item.path}
+                  key={item.name}
                   to={item.path}
                   onClick={() => setSidebarOpen(false)}
-                  className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                  className={`flex items-center justify-between px-4 py-3 rounded-2xl text-xs font-semibold transition-all ${
                     isActive
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                      : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
+                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 font-bold'
+                      : 'text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium'
                   }`}
                 >
-                  <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-3.5">
                     <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
                     <span>{item.name}</span>
                   </div>
-                  {isActive && <ChevronRight className="w-3.5 h-3.5 text-indigo-200" />}
+                  <ChevronRight className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-600'}`} />
                 </NavLink>
               );
             })}
           </nav>
-
-          {/* Sprout Motivation Card for Employee */}
-          {role === 'Employee' && (
-            <div className="p-4 mx-3 my-3 bg-slate-800/40 rounded-2xl border border-slate-800 space-y-1 text-left">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mb-2">
-                <Sprout className="w-4 h-4" />
-              </div>
-              <p className="text-xs font-bold text-white leading-snug">Grow Today Lead Tomorrow</p>
-              <p className="text-[10px] text-slate-400">Continuous learning builds stronger leaders.</p>
-            </div>
-          )}
         </div>
 
         {/* Footer / Team Info & Logout */}
-        <div className="p-4 border-t border-slate-800/80 bg-slate-950/40">
+        <div className="p-4 border-t border-slate-800/80 bg-slate-950/60">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center justify-center space-x-2 px-3 py-2.5 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-500/10 transition-colors border border-rose-500/20"
+            className="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded-2xl text-xs font-bold text-rose-400 hover:bg-rose-500/10 transition-colors border border-rose-500/30 bg-rose-950/20"
           >
-            <LogOut className="w-4 h-4" />
-            <span>Sign Out ({user.username})</span>
+            <LogOut className="w-4 h-4 text-rose-400" />
+            <span>Sign Out ({user.username || 'arun.kumar'})</span>
           </button>
         </div>
       </aside>
