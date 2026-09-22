@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { User, CheckSquare, Clock, ShieldAlert, Award, TrendingUp, RefreshCw, ArrowRight, Play, CheckCircle2, Sparkles, AlertCircle } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import StatusBadge from '../components/StatusBadge';
-import { assessmentService, employeeService, gapService } from '../services/api';
+import { authService, assessmentService, employeeService, gapService } from '../services/api';
 
 export const EmployeeDashboard = () => {
   const [loading, setLoading] = useState(true);
