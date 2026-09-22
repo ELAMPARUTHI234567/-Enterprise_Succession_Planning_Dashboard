@@ -20,28 +20,28 @@ export const EmployeeDashboard = () => {
   const fetchEmployeeData = async () => {
     setLoading(true);
     setError('');
-    const empId = user.employee_id || 1;
     try {
-      // 1. Get employee profile
-      const empRes = await employeeService.getById(empId, 1);
-      if (empRes.success) {
-        setEmployeeProfile(empRes.data);
+      // 1. Get authenticated user profile & linked employee info
+      const meRes = await authService.getMe();
+      if (meRes.success) {
+        const empData = meRes.data.employee_profile || meRes.data;
+        setEmployeeProfile(empData);
       }
 
-      // 2. Get assigned assessments for employee
-      const assRes = await assessmentService.getMyAssessments(empId);
+      // 2. Get assigned assessments for authenticated employee
+      const assRes = await assessmentService.getMyAssessments();
       if (assRes.success) {
         setMyAssessments(assRes.data || []);
       }
 
-      // 3. Get competency gap analysis for employee
-      const gapRes = await gapService.getGapAnalysis(empId, 1);
+      // 3. Get competency gap analysis for authenticated employee
+      const gapRes = await gapService.getMyGaps(1);
       if (gapRes.success) {
         setGapData(gapRes.data);
       }
 
-      // 4. Get readiness details for employee
-      const readRes = await gapService.getReadiness(empId, 1);
+      // 4. Get readiness details for authenticated employee
+      const readRes = await gapService.getMyReadiness(1);
       if (readRes.success) {
         setReadinessData(readRes.data);
       }

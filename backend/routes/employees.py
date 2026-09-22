@@ -7,6 +7,7 @@ from models.role import LeadershipRole
 from models.role_competency import RoleCompetency
 from services.gap_service import calculate_competency_gaps
 from services.readiness_service import calculate_successor_readiness
+from utils.auth_middleware import get_current_user, require_role
 
 employees_bp = Blueprint('employees', __name__)
 
@@ -16,6 +17,12 @@ def get_employees():
     department = request.args.get('department', '').strip()
     manager_id = request.args.get('manager_id', type=int)
     availability = request.args.get('availability', '').strip()
+
+    user, current_emp, err_msg, _ = get_current_user()
+    
+    # If authenticated user is a Manager without manager_id parameter, scope to their direct reports
+    if user and user.role.lower() == 'manager' and current_emp and not manager_id:
+        manager_id = current_emp.id
 
     query = Employee.query
 
@@ -62,15 +69,37 @@ def get_employees():
 
     return jsonify({"success": True, "data": emp_data}), 200
 
+@employees_bp.route('/team/employees', methods=['GET'])
+def get_team_employees():
+    user, current_emp, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    if not current_emp:
+        return jsonify({"success": True, "data": []}), 200
+
+    # Team members = direct reports
+    subordinates = Employee.query.filter_by(manager_id=current_emp.id).all()
+    return jsonify({
+        "success": True,
+        "data": [s.to_dict() for s in subordinates]
+    }), 200
+
 @employees_bp.route('/employees/<int:emp_id>', methods=['GET'])
 def get_employee_detail(emp_id):
+    user, current_emp, err_msg, _ = get_current_user()
+    
+    # Enforce data isolation: Employees can ONLY view their own profile!
+    if user and user.role.lower() not in ['hr', 'admin', 'manager']:
+        if current_emp and current_emp.id != emp_id:
+            return jsonify({"success": False, "message": "Access forbidden: Employees can only view their own profile"}), 403
+
     emp = Employee.query.get(emp_id)
     if not emp:
         return jsonify({"success": False, "message": "Employee not found"}), 404
 
     emp_dict = emp.to_dict()
 
-    # Get employee competency scores
     emp_comps = EmployeeCompetency.query.filter_by(employee_id=emp_id).all()
     comp_list = []
     for ec in emp_comps:
@@ -81,7 +110,6 @@ def get_employee_detail(emp_id):
         })
     emp_dict["competencies"] = comp_list
 
-    # Default gap & readiness for default target role #1
     target_role_id = request.args.get('role_id', 1, type=int)
     gap_data = calculate_competency_gaps(emp_id, target_role_id)
     readiness_data = calculate_successor_readiness(emp_id, target_role_id)
@@ -94,6 +122,10 @@ def get_employee_detail(emp_id):
 
 @employees_bp.route('/employees', methods=['POST'])
 def create_employee():
+    user, _, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     data = request.get_json() or {}
 
     code = data.get('employee_code', '').strip()
@@ -145,6 +177,10 @@ def create_employee():
 
 @employees_bp.route('/employees/<int:emp_id>', methods=['PUT'])
 def update_employee(emp_id):
+    user, _, err_msg, status = require_role('HR', 'Admin', 'Manager')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     emp = Employee.query.get(emp_id)
     if not emp:
         return jsonify({"success": False, "message": "Employee not found"}), 404
@@ -167,6 +203,10 @@ def update_employee(emp_id):
 
 @employees_bp.route('/employees/<int:emp_id>', methods=['DELETE'])
 def delete_employee(emp_id):
+    user, _, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     emp = Employee.query.get(emp_id)
     if not emp:
         return jsonify({"success": False, "message": "Employee not found"}), 404

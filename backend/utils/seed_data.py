@@ -266,3 +266,53 @@ def seed_database_if_empty():
 
     db.session.commit()
     print("[SUCCESS] Initial demonstration database seed completed successfully!")
+
+    # Auto-sync all employee user accounts
+    sync_employee_users()
+
+def sync_employee_users():
+    """
+    Ensures every Employee in the database has an associated User account
+    for individual authentication (e.g. arun.kumar, priya.sharma, sneha.reddy).
+    """
+    try:
+        employees = Employee.query.all()
+        created_count = 0
+
+        for emp in employees:
+            if not emp.user_id or not User.query.get(emp.user_id):
+                clean_name = emp.name.lower().strip()
+                username = clean_name.replace(' ', '.')
+                
+                existing_user = User.query.filter_by(username=username).first()
+                if existing_user:
+                    if existing_user.email == emp.email:
+                        emp.user_id = existing_user.id
+                        continue
+                    else:
+                        username = f"{username}.{emp.id}"
+
+                role = 'Manager' if 'manager' in emp.designation.lower() else 'Employee'
+                pwd = 'manager123' if role == 'Manager' else 'employee123'
+
+                user = User(
+                    name=emp.name,
+                    username=username,
+                    email=emp.email,
+                    role=role,
+                    status='Active'
+                )
+                user.set_password(pwd)
+                db.session.add(user)
+                db.session.flush()
+
+                emp.user_id = user.id
+                created_count += 1
+
+        if created_count > 0:
+            db.session.commit()
+            print(f"[SUCCESS] Linked/created {created_count} individual employee user accounts.")
+    except Exception as e:
+        db.session.rollback()
+        print(f"[WARNING] Error in sync_employee_users: {str(e)}")
+

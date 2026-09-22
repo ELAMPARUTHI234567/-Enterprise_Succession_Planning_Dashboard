@@ -7,6 +7,7 @@ from models.employee_competency import EmployeeCompetency
 from models.competency import Competency
 from services.gap_service import calculate_competency_gaps
 from services.readiness_service import calculate_successor_readiness
+from utils.auth_middleware import get_current_user, require_role
 from datetime import datetime
 
 assessments_bp = Blueprint('assessments', __name__)
@@ -21,11 +22,14 @@ def get_assessments():
 
 @assessments_bp.route('/assessments', methods=['POST'])
 def create_assessment():
-    data = request.get_json() or {}
+    user, employee, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
 
+    data = request.get_json() or {}
     title = data.get('title', '').strip()
     description = data.get('description', '').strip()
-    created_by = data.get('created_by')
+    created_by = user.id
     role_id = data.get('role_id')
     duration = int(data.get('duration', 30))
     due_date = data.get('due_date', '')
@@ -72,24 +76,32 @@ def create_assessment():
 
 @assessments_bp.route('/assessments/<int:assessment_id>/assign', methods=['POST'])
 def assign_assessment(assessment_id):
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     assessment = Assessment.query.get(assessment_id)
     if not assessment:
         return jsonify({"success": False, "message": "Assessment not found"}), 404
 
     data = request.get_json() or {}
     employee_id = data.get('employee_id')
-    assigned_by = data.get('assigned_by')
+    assigned_by = user.id
     due_date = data.get('due_date', assessment.due_date)
     instructions = data.get('instructions', '')
 
     if not employee_id:
         return jsonify({"success": False, "message": "Employee ID is required for assignment"}), 400
 
-    employee = Employee.query.get(employee_id)
-    if not employee:
+    emp_target = Employee.query.get(employee_id)
+    if not emp_target:
         return jsonify({"success": False, "message": "Employee not found"}), 404
 
-    # Check if already assigned and pending
+    # If Manager, ensure target employee belongs to their team
+    if user.role.lower() == 'manager' and employee:
+        if emp_target.manager_id != employee.id and emp_target.id != employee.id:
+            return jsonify({"success": False, "message": "Access forbidden: Managers can only assign assessments to direct reports."}), 403
+
     existing = AssessmentAssignment.query.filter_by(
         assessment_id=assessment_id, employee_id=employee_id
     ).filter(AssessmentAssignment.status != 'Completed').first()
@@ -115,33 +127,91 @@ def assign_assessment(assessment_id):
     return jsonify({
         "success": True,
         "data": assignment.to_dict(),
-        "message": f"Assessment assigned successfully to {employee.name}"
+        "message": f"Assessment assigned successfully to {emp_target.name}"
     }), 201
 
 @assessments_bp.route('/my-assessments', methods=['GET'])
+@assessments_bp.route('/me/assessments', methods=['GET'])
 def get_my_assessments():
-    employee_id = request.args.get('employee_id', type=int)
-    
-    if not employee_id:
-        # Default fallback to Employee #1 (Arun Kumar) if not specified
-        employee_id = 1
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        # Fallback for unauthenticated query param if requested
+        requested_emp_id = request.args.get('employee_id', type=int)
+        if requested_emp_id:
+            assignments = AssessmentAssignment.query.filter_by(employee_id=requested_emp_id).order_by(AssessmentAssignment.id.desc()).all()
+            return jsonify({"success": True, "data": [a.to_dict() for a in assignments]}), 200
+        return jsonify({"success": False, "message": err_msg}), status
 
-    assignments = AssessmentAssignment.query.filter_by(employee_id=employee_id).order_by(AssessmentAssignment.id.desc()).all()
-    
+    if not employee:
+        return jsonify({"success": True, "data": []}), 200
+
+    assignments = AssessmentAssignment.query.filter_by(employee_id=employee.id).order_by(AssessmentAssignment.id.desc()).all()
     return jsonify({
         "success": True,
         "data": [a.to_dict() for a in assignments]
     }), 200
 
+@assessments_bp.route('/me/results', methods=['GET'])
+def get_my_results():
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    if not employee:
+        return jsonify({"success": True, "data": []}), 200
+
+    assignments = AssessmentAssignment.query.filter_by(employee_id=employee.id, status='Completed').order_by(AssessmentAssignment.id.desc()).all()
+    results = []
+    for a in assignments:
+        if a.result:
+            rdata = a.result.to_dict()
+            rdata["assignment"] = a.to_dict()
+            results.append(rdata)
+
+    return jsonify({"success": True, "data": results}), 200
+
+@assessments_bp.route('/me/gaps', methods=['GET'])
+def get_my_gaps():
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    if not employee:
+        return jsonify({"success": False, "message": "No linked employee profile found"}), 404
+
+    role_id = request.args.get('role_id', default=1, type=int)
+    gap_data = calculate_competency_gaps(employee.id, role_id)
+    return jsonify({"success": True, "data": gap_data}), 200
+
+@assessments_bp.route('/me/readiness', methods=['GET'])
+def get_my_readiness():
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    if not employee:
+        return jsonify({"success": False, "message": "No linked employee profile found"}), 404
+
+    role_id = request.args.get('role_id', default=1, type=int)
+    readiness_data = calculate_successor_readiness(employee.id, role_id)
+    return jsonify({"success": True, "data": readiness_data}), 200
+
 @assessments_bp.route('/assessment-assignments/<int:assignment_id>', methods=['GET'])
 def get_assignment_detail(assignment_id):
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     assignment = AssessmentAssignment.query.get(assignment_id)
     if not assignment:
         return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
 
+    # Enforce data isolation: Employees can ONLY view their own assignments!
+    if user.role.lower() not in ['hr', 'admin', 'manager']:
+        if not employee or assignment.employee_id != employee.id:
+            return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's assessment"}), 403
+
     data = assignment.to_dict()
-    
-    # Include questions list
     questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).order_by(AssessmentQuestion.order_index.asc()).all()
     data["questions"] = [q.to_dict() for q in questions]
 
@@ -152,20 +222,28 @@ def get_assignment_detail(assignment_id):
 
 @assessments_bp.route('/assessment-assignments/<int:assignment_id>/submit', methods=['POST'])
 def submit_assessment(assignment_id):
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     assignment = AssessmentAssignment.query.get(assignment_id)
     if not assignment:
         return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
 
+    # Enforce data isolation: Employees can ONLY submit their own assignments!
+    if user.role.lower() not in ['hr', 'admin', 'manager']:
+        if not employee or assignment.employee_id != employee.id:
+            return jsonify({"success": False, "message": "Access forbidden: You cannot submit an assessment assigned to another employee"}), 403
+
     data = request.get_json() or {}
-    answers_input = data.get('answers', {}) # Dict of question_id -> string answer
+    answers_input = data.get('answers', {})
 
     questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).all()
 
     total_achieved = 0.0
     total_possible = 0.0
-    competency_scores_map = {} # competency_id -> {"total": x, "possible": y}
+    competency_scores_map = {}
 
-    # Remove prior answers if resubmitting
     AssessmentAnswer.query.filter_by(assignment_id=assignment_id).delete()
 
     for q in questions:
@@ -173,31 +251,27 @@ def submit_assessment(assignment_id):
         max_sc = q.max_score
         total_possible += max_sc
 
-        # Simple grading logic
         achieved = 0.0
         if q.question_type in ['Multiple Choice', 'Yes/No']:
-            # Compare first char or string equality
             corr = (q.correct_answer or "").strip()
             if corr and (user_ans.lower() == corr.lower() or user_ans.startswith(corr[:1])):
                 achieved = max_sc
-            elif not corr: # if no strict key, grant full on selection
+            elif not corr:
                 achieved = max_sc
         elif q.question_type == 'Rating Scale':
-            # Numeric value 1-5 scale to percentage
             try:
                 val = float(user_ans)
                 achieved = (val / 5.0) * max_sc
             except ValueError:
                 achieved = max_sc * 0.8
-        else: # Scenario-Based or Short Answer
+        else:
             if len(user_ans) > 5:
-                achieved = max_sc * 0.9 # Grant scenario answer credit
+                achieved = max_sc * 0.9
             else:
                 achieved = max_sc * 0.5
 
         total_achieved += achieved
 
-        # Record answer
         ans_record = AssessmentAnswer(
             assignment_id=assignment_id,
             question_id=q.id,
@@ -206,21 +280,17 @@ def submit_assessment(assignment_id):
         )
         db.session.add(ans_record)
 
-        # Track per-competency score
         if q.competency_id:
             if q.competency_id not in competency_scores_map:
                 competency_scores_map[q.competency_id] = {"total": 0.0, "possible": 0.0}
             competency_scores_map[q.competency_id]["total"] += achieved
             competency_scores_map[q.competency_id]["possible"] += max_sc
 
-    # Overall percentage
     overall_score = round((total_achieved / total_possible * 100.0), 2) if total_possible > 0 else 80.0
     readiness_lvl = "High" if overall_score >= 80.0 else ("Medium" if overall_score >= 60.0 else "Low")
 
-    # Update Assignment status
     assignment.status = "Completed"
 
-    # Save or update result record
     result = AssessmentResult.query.filter_by(assignment_id=assignment_id).first()
     if not result:
         result = AssessmentResult(assignment_id=assignment_id)
@@ -230,7 +300,6 @@ def submit_assessment(assignment_id):
     result.readiness_level = readiness_lvl
     result.completed_at = datetime.utcnow()
 
-    # Detail breakdown
     detail = {}
     for cid, sc_data in competency_scores_map.items():
         comp = Competency.query.get(cid)
@@ -238,12 +307,10 @@ def submit_assessment(assignment_id):
         calc_pct = round((sc_data["total"] / sc_data["possible"] * 100.0), 2) if sc_data["possible"] > 0 else overall_score
         detail[cname] = calc_pct
 
-        # Update Employee Competency current score in DB!
         emp_comp = EmployeeCompetency.query.filter_by(
             employee_id=assignment.employee_id, competency_id=cid
         ).first()
         if emp_comp:
-            # Weighted average between current & new score
             emp_comp.score = round((emp_comp.score * 0.4 + calc_pct * 0.6), 2)
         else:
             db.session.add(EmployeeCompetency(
@@ -253,7 +320,6 @@ def submit_assessment(assignment_id):
     result.set_detail(detail)
     db.session.commit()
 
-    # Calculate updated gap analysis & readiness score for employee
     updated_gap = calculate_competency_gaps(assignment.employee_id, assignment.assessment.role_id if assignment.assessment else 1)
     updated_readiness = calculate_successor_readiness(assignment.employee_id, assignment.assessment.role_id if assignment.assessment else 1)
 
@@ -272,9 +338,17 @@ def submit_assessment(assignment_id):
 
 @assessments_bp.route('/assessment-results/<int:assignment_id>', methods=['GET'])
 def get_assessment_result(assignment_id):
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     assignment = AssessmentAssignment.query.get(assignment_id)
     if not assignment:
         return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
+
+    if user.role.lower() not in ['hr', 'admin', 'manager']:
+        if not employee or assignment.employee_id != employee.id:
+            return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's result"}), 403
 
     if not assignment.result:
         return jsonify({"success": False, "message": "Assessment has not been completed yet"}), 400

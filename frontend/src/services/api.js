@@ -53,6 +53,10 @@ api.interceptors.response.use(
 export const authService = {
   login: (credentials) => api.post('/login', credentials),
   getMe: () => api.get('/me'),
+  getUserAccounts: () => api.get('/user-accounts'),
+  createUserAccount: (data) => api.post('/user-accounts', data),
+  updateUserAccount: (id, data) => api.put(`/user-accounts/${id}`, data),
+  toggleUserStatus: (id) => api.post(`/user-accounts/${id}/toggle-status`),
   logout: () => {
     localStorage.removeItem('succession_token');
     localStorage.removeItem('succession_user');
@@ -89,7 +93,8 @@ export const assessmentService = {
   getAll: () => api.get('/assessments'),
   create: (data) => api.post('/assessments', data),
   assign: (assessmentId, assignData) => api.post(`/assessments/${assessmentId}/assign`, assignData),
-  getMyAssessments: (employeeId) => api.get('/my-assessments', { params: { employee_id: employeeId } }),
+  getMyAssessments: (employeeId) => api.get('/me/assessments', { params: { employee_id: employeeId } }),
+  getMyResults: () => api.get('/me/results'),
   getAssignmentDetail: (assignmentId) => api.get(`/assessment-assignments/${assignmentId}`),
   submitAssessment: (assignmentId, answers) => api.post(`/assessment-assignments/${assignmentId}/submit`, { answers }),
   getResult: (assignmentId) => api.get(`/assessment-results/${assignmentId}`),
@@ -98,6 +103,8 @@ export const assessmentService = {
 export const gapService = {
   getGapAnalysis: (employeeId, roleId = 1) => api.get(`/gap-analysis/${employeeId}/${roleId}`),
   getReadiness: (employeeId, roleId = 1) => api.get(`/readiness/${employeeId}/${roleId}`),
+  getMyGaps: (roleId = 1) => api.get('/me/gaps', { params: { role_id: roleId } }),
+  getMyReadiness: (roleId = 1) => api.get('/me/readiness', { params: { role_id: roleId } }),
 };
 
 export const successorService = {

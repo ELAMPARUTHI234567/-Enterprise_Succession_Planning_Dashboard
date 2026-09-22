@@ -3,7 +3,7 @@ import sys
 from flask import Flask, jsonify
 from config import Config
 from extensions import db, cors
-from utils.seed_data import seed_database_if_empty
+from utils.seed_data import seed_database_if_empty, sync_employee_users
 
 # Imports blueprints
 from routes import (
@@ -116,6 +116,7 @@ def create_app():
         try:
             db.create_all()
             seed_database_if_empty()
+            sync_employee_users()
             print(f"[SUCCESS] Database tables verified & seeded cleanly.")
         except Exception as e:
             print(f"[WARNING] Primary database setup issue: {str(e)}")
