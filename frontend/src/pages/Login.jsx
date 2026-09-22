@@ -99,10 +99,10 @@ export const Login = () => {
             <Users className="w-8 h-8 stroke-[2.2]" />
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-            Enterprise HR Portal
+            Enterprise {selectedRole} Portal
           </h1>
           <p className="text-xs sm:text-sm font-medium text-slate-500">
-            Sign in to access your dashboard
+            Sign in to access your {selectedRole} dashboard
           </p>
         </div>
 
@@ -237,7 +237,7 @@ export const Login = () => {
               </>
             ) : (
               <>
-                <span>Sign In</span>
+                <span>Sign In to {selectedRole} Dashboard</span>
                 <ArrowRight className="w-4 h-4 stroke-[2.5]" />
               </>
             )}

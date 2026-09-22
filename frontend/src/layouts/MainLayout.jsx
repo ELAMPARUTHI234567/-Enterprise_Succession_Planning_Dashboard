@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, Award, ShieldAlert,
   Sliders, UserCheck, TrendingUp, BarChart3,
   FileText, LogOut, Search, Bell, Menu, X, ChevronRight, User,
-  Sparkles, Briefcase, UserPlus, CheckSquare, Settings
+  Sparkles, Briefcase, UserPlus, CheckSquare, Settings, Clock, Sprout
 } from 'lucide-react';
 import { authService } from '../services/api';
 
@@ -52,11 +52,16 @@ export const MainLayout = ({ children }) => {
   } else {
     // Employee Role
     navItems = [
-      { name: 'My Dashboard', path: '/employee-dashboard', icon: LayoutDashboard },
-      { name: 'My Profile', path: '/my-profile', icon: User },
-      { name: 'My Assessments', path: '/my-assessments', icon: CheckSquare },
-      { name: 'My Competencies', path: '/my-competencies', icon: Sliders },
-      { name: 'Development Areas', path: '/my-development', icon: ShieldAlert },
+      { name: 'Dashboard', path: '/employee-dashboard', icon: LayoutDashboard },
+      { name: 'My Profile', path: '/employee-dashboard', icon: User },
+      { name: 'My Competencies', path: '/employee-dashboard', icon: Sliders },
+      { name: 'My Assessments', path: '/employee-dashboard', icon: CheckSquare },
+      { name: 'Assessment History', path: '/employee-dashboard', icon: Clock },
+      { name: 'My Results', path: '/employee-dashboard', icon: Award },
+      { name: 'Competency Gaps', path: '/employee-dashboard', icon: ShieldAlert },
+      { name: 'My Readiness', path: '/employee-dashboard', icon: TrendingUp },
+      { name: 'Development Plan', path: '/employee-dashboard', icon: FileText },
+      { name: 'Resources', path: '/employee-dashboard', icon: Sparkles },
     ];
   }
 
@@ -143,6 +148,17 @@ export const MainLayout = ({ children }) => {
               );
             })}
           </nav>
+
+          {/* Sprout Motivation Card for Employee */}
+          {role === 'Employee' && (
+            <div className="p-4 mx-3 my-3 bg-slate-800/40 rounded-2xl border border-slate-800 space-y-1 text-left">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mb-2">
+                <Sprout className="w-4 h-4" />
+              </div>
+              <p className="text-xs font-bold text-white leading-snug">Grow Today Lead Tomorrow</p>
+              <p className="text-[10px] text-slate-400">Continuous learning builds stronger leaders.</p>
+            </div>
+          )}
         </div>
 
         {/* Footer / Team Info & Logout */}
