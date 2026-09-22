@@ -81,8 +81,23 @@ def create_app():
             app.config["SQLALCHEMY_DATABASE_URI"] = Config.SQLITE_DATABASE_URI
             print(f"[INFO] Using SQLite database engine: {Config.SQLITE_DATABASE_URI}")
         else:
-            app.config["SQLALCHEMY_DATABASE_URI"] = Config.LOCAL_POSTGRES_URI
-            print(f"[INFO] Using local PostgreSQL database connection: {mask_db_uri(Config.LOCAL_POSTGRES_URI)}")
+            use_postgres = False
+            try:
+                from sqlalchemy import create_engine
+                test_engine = create_engine(Config.LOCAL_POSTGRES_URI, connect_args={"connect_timeout": 2})
+                with test_engine.connect() as conn:
+                    pass
+                test_engine.dispose()
+                use_postgres = True
+            except Exception:
+                use_postgres = False
+
+            if use_postgres:
+                app.config["SQLALCHEMY_DATABASE_URI"] = Config.LOCAL_POSTGRES_URI
+                print(f"[INFO] Using local PostgreSQL database connection: {mask_db_uri(Config.LOCAL_POSTGRES_URI)}")
+            else:
+                app.config["SQLALCHEMY_DATABASE_URI"] = Config.SQLITE_DATABASE_URI
+                print(f"[INFO] Local PostgreSQL connection unavailable. Defaulting to SQLite engine: {Config.SQLITE_DATABASE_URI}")
 
     # Initialize SQLAlchemy ONCE with finalized database URI
     db.init_app(app)
@@ -93,17 +108,7 @@ def create_app():
             seed_database_if_empty()
             print(f"[SUCCESS] Database tables verified & seeded cleanly.")
         except Exception as e:
-            print(f"[WARNING] Primary database connection failed ({str(e)}).")
-            if not Config.IS_PRODUCTION and not Config.VALID_DATABASE_URL and not Config.USE_SQLITE:
-                print("[INFO] Local PostgreSQL connection failed. Falling back to SQLite for local development.")
-                app.config["SQLALCHEMY_DATABASE_URI"] = Config.SQLITE_DATABASE_URI
-                try:
-                    db.engine.dispose()
-                    db.create_all()
-                    seed_database_if_empty()
-                    print(f"[SUCCESS] Local SQLite database fallback initialized.")
-                except Exception as sqlite_err:
-                    print(f"[WARNING] SQLite local fallback init error: {sqlite_err}")
+            print(f"[WARNING] Primary database setup issue: {str(e)}")
 
     # Register API Blueprints
     app.register_blueprint(auth_bp, url_prefix='/api')
