@@ -4,7 +4,7 @@ from models.successor_result import SuccessorResult
 from services.gap_service import calculate_competency_gaps
 from extensions import db
 
-def calculate_successor_readiness(employee_id, role_id):
+def calculate_successor_readiness(employee_id, role_id, employee=None, role=None, competencies=None, role_reqs=None, emp_scores=None):
     """
     Computes baseline successor readiness score using weighted components:
     - Competency Score: 40%
@@ -12,14 +12,20 @@ def calculate_successor_readiness(employee_id, role_id):
     - Experience Score: 15% (Normalized: experience_years / 10 * 100, max 100)
     - Leadership Score: 20%
     """
-    employee = Employee.query.get(employee_id)
-    role = LeadershipRole.query.get(role_id)
+    if employee is None:
+        employee = Employee.query.get(employee_id)
+    if role is None:
+        role = LeadershipRole.query.get(role_id)
 
     if not employee or not role:
         return None
 
     # Calculate competency gaps and overall competency score
-    gap_result = calculate_competency_gaps(employee_id, role_id)
+    gap_result = calculate_competency_gaps(
+        employee_id, role_id,
+        employee=employee, role=role,
+        competencies=competencies, role_reqs=role_reqs, emp_scores=emp_scores
+    )
     competency_score = gap_result["overall_competency_score"]
     major_gap = gap_result["major_gap"]
 

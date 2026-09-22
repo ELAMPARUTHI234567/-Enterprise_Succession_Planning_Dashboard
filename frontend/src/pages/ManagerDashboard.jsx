@@ -52,6 +52,25 @@ export const ManagerDashboard = () => {
     );
   }
 
+  if (error || (!summary && teamMembers.length === 0)) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 p-6 bg-white rounded-2xl border border-slate-200 card-shadow text-center">
+        <ShieldAlert className="w-12 h-12 text-rose-500 mb-3" />
+        <h3 className="text-base font-bold text-slate-800">Unable to Load Manager Team Dashboard</h3>
+        <p className="text-xs text-slate-500 mt-1 mb-4 max-w-md">
+          {error || 'Unable to connect to the server. Please check the backend connection.'}
+        </p>
+        <button
+          onClick={fetchManagerData}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all flex items-center space-x-2"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          <span>Retry Loading Dashboard</span>
+        </button>
+      </div>
+    );
+  }
+
   const kpis = summary?.kpis || {};
   const charts = summary?.charts || {};
   const topSuccessors = summary?.top_successors || [];

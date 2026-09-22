@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BarChart3, RefreshCw, Layers } from 'lucide-react';
+import { BarChart3, RefreshCw, Layers, AlertTriangle } from 'lucide-react';
 import CompetencyBarChart from '../charts/CompetencyBarChart';
 import ReadinessPieChart from '../charts/ReadinessPieChart';
 import { analyticsService } from '../services/api';
@@ -11,13 +11,16 @@ export const Analytics = () => {
 
   const fetchAnalytics = async () => {
     setLoading(true);
+    setError('');
     try {
       const res = await analyticsService.getAnalytics();
-      if (res.success) {
+      if (res.success && res.data) {
         setAnalytics(res.data);
+      } else {
+        setError(res.message || 'Failed to load analytics data');
       }
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Unable to connect to the server. Please check the backend connection.');
     } finally {
       setLoading(false);
     }
@@ -36,8 +39,27 @@ export const Analytics = () => {
     );
   }
 
-  const deptData = analytics?.department_analytics || {};
-  const compAvg = analytics?.competency_averages || {};
+  if (error || !analytics) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 p-6 bg-white rounded-2xl border border-slate-200 card-shadow text-center">
+        <AlertTriangle className="w-12 h-12 text-rose-500 mb-3" />
+        <h3 className="text-base font-bold text-slate-800">Unable to Load HR Analytics</h3>
+        <p className="text-xs text-slate-500 mt-1 mb-4 max-w-md">
+          {error || 'Unable to connect to the server. Please check the backend connection.'}
+        </p>
+        <button
+          onClick={fetchAnalytics}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all flex items-center space-x-2"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          <span>Retry Loading Analytics</span>
+        </button>
+      </div>
+    );
+  }
+
+  const deptData = analytics?.department_analytics || { labels: [], counts: [], avg_readiness: [] };
+  const compAvg = analytics?.competency_averages || { labels: [], averages: [] };
   const gapSeverity = analytics?.gap_severity || {};
   const scatterPoints = analytics?.performance_vs_readiness || [];
 
@@ -75,7 +97,7 @@ export const Analytics = () => {
           <CompetencyBarChart
             labels={compAvg.labels}
             currentScores={compAvg.averages}
-            requiredScores={compAvg.averages.map(() => 85)}
+            requiredScores={(compAvg.averages || []).map(() => 85)}
           />
         </div>
 

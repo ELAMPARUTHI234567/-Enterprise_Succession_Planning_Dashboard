@@ -10,17 +10,31 @@ from services.gap_service import calculate_competency_gaps
 
 reports_bp = Blueprint('reports', __name__)
 
+from models.role_competency import RoleCompetency
+
 @reports_bp.route('/reports/summary', methods=['GET'])
 def get_reports_summary():
     employees = Employee.query.all()
     roles = LeadershipRole.query.all()
+    competencies = Competency.query.all()
 
-    default_role_id = roles[0].id if roles else 1
+    default_role = roles[0] if roles else None
+    default_role_id = default_role.id if default_role else 1
+    role_reqs = RoleCompetency.query.filter_by(role_id=default_role_id).all() if default_role else []
+
+    all_emp_comps = EmployeeCompetency.query.all()
+    emp_comp_map = {}
+    for ec in all_emp_comps:
+        emp_comp_map.setdefault(ec.employee_id, []).append(ec)
 
     emp_reports = []
     for emp in employees:
-        r_info = calculate_successor_readiness(emp.id, default_role_id)
-        g_info = calculate_competency_gaps(emp.id, default_role_id)
+        e_comps = emp_comp_map.get(emp.id, [])
+        r_info = calculate_successor_readiness(
+            emp.id, default_role_id,
+            employee=emp, role=default_role,
+            competencies=competencies, role_reqs=role_reqs, emp_scores=e_comps
+        )
 
         emp_reports.append({
             "id": emp.id,
@@ -31,7 +45,7 @@ def get_reports_summary():
             "experience_years": emp.experience_years,
             "performance_score": emp.performance_score,
             "leadership_score": emp.leadership_score,
-            "overall_competency_score": g_info["overall_competency_score"] if g_info else 0.0,
+            "overall_competency_score": r_info["competency_score"] if r_info else 0.0,
             "readiness_score": r_info["readiness_score"] if r_info else 0.0,
             "readiness_level": r_info["readiness_level"] if r_info else "Low",
             "major_gap": r_info["major_gap"] if r_info else "None"

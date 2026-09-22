@@ -19,13 +19,13 @@ export const Dashboard = () => {
     setError('');
     try {
       const res = await dashboardService.getSummary();
-      if (res.success) {
+      if (res.success && res.data) {
         setSummary(res.data);
       } else {
         setError(res.message || 'Failed to load dashboard data');
       }
     } catch (err) {
-      setError(err.message || 'Connection error loading dashboard');
+      setError(err.message || 'Unable to connect to the server. Please check the backend connection.');
     } finally {
       setLoading(false);
     }
@@ -40,6 +40,25 @@ export const Dashboard = () => {
       <div className="flex flex-col items-center justify-center h-96">
         <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mb-3" />
         <p className="text-xs font-semibold text-slate-500">Loading Enterprise Analytics...</p>
+      </div>
+    );
+  }
+
+  if (error || !summary) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 p-6 bg-white rounded-2xl border border-slate-200 card-shadow text-center">
+        <AlertTriangle className="w-12 h-12 text-rose-500 mb-3" />
+        <h3 className="text-base font-bold text-slate-800">Unable to Load Enterprise Analytics</h3>
+        <p className="text-xs text-slate-500 mt-1 mb-4 max-w-md">
+          {error || 'Unable to connect to the server. Please check the backend connection.'}
+        </p>
+        <button
+          onClick={fetchDashboardData}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all flex items-center space-x-2"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          <span>Retry Loading Dashboard</span>
+        </button>
       </div>
     );
   }

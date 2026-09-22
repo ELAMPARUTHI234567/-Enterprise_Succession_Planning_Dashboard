@@ -4,7 +4,7 @@ from models.competency import Competency
 from models.role_competency import RoleCompetency
 from models.employee_competency import EmployeeCompetency
 
-def calculate_competency_gaps(employee_id, role_id):
+def calculate_competency_gaps(employee_id, role_id, employee=None, role=None, competencies=None, role_reqs=None, emp_scores=None):
     """
     Calculates competency gaps between employee's current scores and target leadership role requirements.
     Formula: Gap = Required Score - Current Score (If Current >= Required, Gap = 0).
@@ -16,22 +16,27 @@ def calculate_competency_gaps(employee_id, role_id):
       - Current >= Required: Strength
       - Current < Required: Improvement Area
     """
-    employee = Employee.query.get(employee_id)
-    role = LeadershipRole.query.get(role_id)
+    if employee is None:
+        employee = Employee.query.get(employee_id)
+    if role is None:
+        role = LeadershipRole.query.get(role_id)
 
     if not employee or not role:
         return None
 
-    # Fetch role competency requirements
-    role_reqs = RoleCompetency.query.filter_by(role_id=role_id).all()
+    # Fetch role competency requirements if not provided
+    if role_reqs is None:
+        role_reqs = RoleCompetency.query.filter_by(role_id=role_id).all()
     req_dict = {rr.competency_id: rr.required_score for rr in role_reqs}
 
-    # Fetch employee current scores
-    emp_scores = EmployeeCompetency.query.filter_by(employee_id=employee_id).all()
+    # Fetch employee current scores if not provided
+    if emp_scores is None:
+        emp_scores = EmployeeCompetency.query.filter_by(employee_id=employee_id).all()
     score_dict = {es.competency_id: es.score for es in emp_scores}
 
     # All competencies dictionary
-    competencies = Competency.query.all()
+    if competencies is None:
+        competencies = Competency.query.all()
 
     gap_items = []
     total_current_score = 0.0

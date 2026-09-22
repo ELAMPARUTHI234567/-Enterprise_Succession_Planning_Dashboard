@@ -3,6 +3,8 @@ from extensions import db
 from models.employee import Employee
 from models.employee_competency import EmployeeCompetency
 from models.competency import Competency
+from models.role import LeadershipRole
+from models.role_competency import RoleCompetency
 from services.gap_service import calculate_competency_gaps
 from services.readiness_service import calculate_successor_readiness
 
@@ -34,11 +36,26 @@ def get_employees():
         query = query.filter(Employee.availability_status == availability)
 
     employees = query.order_by(Employee.id.asc()).all()
-    
+    roles = LeadershipRole.query.all()
+    competencies = Competency.query.all()
+    default_role = roles[0] if roles else None
+    default_role_id = default_role.id if default_role else 1
+    role_reqs = RoleCompetency.query.filter_by(role_id=default_role_id).all() if default_role else []
+
+    all_emp_comps = EmployeeCompetency.query.all()
+    emp_comp_map = {}
+    for ec in all_emp_comps:
+        emp_comp_map.setdefault(ec.employee_id, []).append(ec)
+
     emp_data = []
     for emp in employees:
         d = emp.to_dict()
-        readiness_info = calculate_successor_readiness(emp.id, 1)
+        e_comps = emp_comp_map.get(emp.id, [])
+        readiness_info = calculate_successor_readiness(
+            emp.id, default_role_id,
+            employee=emp, role=default_role,
+            competencies=competencies, role_reqs=role_reqs, emp_scores=e_comps
+        )
         d["readiness_score"] = readiness_info["readiness_score"] if readiness_info else 0.0
         d["readiness_level"] = readiness_info["readiness_level"] if readiness_info else "Low"
         emp_data.append(d)
