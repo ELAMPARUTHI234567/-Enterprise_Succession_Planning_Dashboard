@@ -1,6 +1,10 @@
 import axios from 'axios';
 
-const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+let rawApiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').trim();
+if (rawApiUrl.includes('enterprise-succession-dashboard.onrender.com')) {
+  rawApiUrl = rawApiUrl.replace('enterprise-succession-dashboard.onrender.com', 'enterprise-succession-planning-dashboard.onrender.com');
+}
+
 const API_BASE_URL = rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl.replace(/\/+$/, '')}/api`;
 
 if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'development')) {
@@ -40,7 +44,7 @@ api.interceptors.response.use(
       return Promise.reject(new Error(responseData));
     }
     if (error.code === 'ERR_NETWORK' || !error.response) {
-      return Promise.reject(new Error(`Network Error (${errCode}: ${errMessage}). Unable to reach API at ${API_BASE_URL}`));
+      return Promise.reject(new Error('Unable to connect to the server. Please check the backend connection.'));
     }
     return Promise.reject(new Error(errMessage));
   }

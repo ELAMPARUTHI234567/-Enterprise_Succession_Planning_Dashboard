@@ -32,9 +32,19 @@ def create_app():
     app.config.from_object(Config)
 
     # Enable CORS
+    import re
     cors_origins = [o.strip() for o in Config.CORS_ORIGINS.split(',')] if Config.CORS_ORIGINS != "*" else "*"
-    if isinstance(cors_origins, list) and "https://enterprise-succession-dashboard.vercel.app" not in cors_origins:
-        cors_origins.append("https://enterprise-succession-dashboard.vercel.app")
+    if isinstance(cors_origins, list):
+        allowed_defaults = [
+            "https://enterprise-succession-dashboard.vercel.app",
+            "https://enterprise-succession-planning-dashboard.vercel.app",
+            "http://localhost:3000",
+            "http://localhost:5173",
+            re.compile(r"https://.*\.vercel\.app")
+        ]
+        for item in allowed_defaults:
+            if item not in cors_origins:
+                cors_origins.append(item)
 
     cors.init_app(app, resources={r"/api/*": {
         "origins": cors_origins,

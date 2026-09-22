@@ -56,10 +56,12 @@ export const Login = () => {
           localStorage.setItem('succession_remember_user', username);
         }
 
+        const userRole = (userData.role || selectedRole || '').toString().toLowerCase();
+
         // Redirect based on role
-        if (userData.role === 'HR' || userData.role === 'Admin') {
+        if (userRole === 'hr' || userRole === 'admin') {
           navigate('/dashboard');
-        } else if (userData.role === 'Manager') {
+        } else if (userRole === 'manager') {
           navigate('/manager-dashboard');
         } else {
           navigate('/employee-dashboard');
@@ -68,7 +70,7 @@ export const Login = () => {
         setError(res.message || 'Invalid username or password');
       }
     } catch (err) {
-      setError(err.message || 'Login failed. Please check backend connection.');
+      setError(err.message || 'Unable to connect to the server. Please check the backend connection.');
     } finally {
       setLoading(false);
     }
