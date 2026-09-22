@@ -280,37 +280,59 @@ def sync_employee_users():
         created_count = 0
 
         for emp in employees:
-            if not emp.user_id or not User.query.get(emp.user_id):
-                clean_name = emp.name.lower().strip()
-                username = clean_name.replace(' ', '.')
-                
-                existing_user = User.query.filter_by(username=username).first()
-                if existing_user:
-                    if existing_user.email == emp.email:
-                        emp.user_id = existing_user.id
-                        continue
-                    else:
-                        username = f"{username}.{emp.id}"
+            clean_name = emp.name.lower().strip()
+            individual_username = clean_name.replace(' ', '.')
+            role = 'Manager' if 'manager' in emp.designation.lower() or 'lead' in emp.designation.lower() else 'Employee'
+            pwd = 'manager123' if role == 'Manager' else 'employee123'
 
-                role = 'Manager' if 'manager' in emp.designation.lower() else 'Employee'
-                pwd = 'manager123' if role == 'Manager' else 'employee123'
+            existing_user = None
+            if emp.user_id:
+                existing_user = User.query.get(emp.user_id)
 
-                user = User(
-                    name=emp.name,
-                    username=username,
-                    email=emp.email,
-                    role=role,
-                    status='Active'
-                )
-                user.set_password(pwd)
-                db.session.add(user)
-                db.session.flush()
+            if not existing_user:
+                existing_user = User.query.filter(
+                    (User.username == individual_username) | (User.email == emp.email)
+                ).first()
 
-                emp.user_id = user.id
-                created_count += 1
+            if existing_user:
+                # Synchronize linked account info and ensure password/status are active
+                emp.user_id = existing_user.id
+                if existing_user.username == 'employee' and emp.name == 'Arun Kumar':
+                    existing_user.username = 'arun.kumar'
+                    existing_user.email = 'arun.kumar@company.com'
+                if not existing_user.check_password(pwd):
+                    existing_user.set_password(pwd)
+                existing_user.status = 'Active'
+                continue
 
+            # Create new individual user account for employee
+            user = User(
+                name=emp.name,
+                username=individual_username,
+                email=emp.email,
+                role=role,
+                status='Active'
+            )
+            user.set_password(pwd)
+            db.session.add(user)
+            db.session.flush()
+
+            emp.user_id = user.id
+            created_count += 1
+
+        # Also ensure 'arun.kumar' user exists explicitly if not created yet
+        arun_user = User.query.filter((User.username == 'arun.kumar') | (User.username == 'employee')).first()
+        if arun_user:
+            arun_user.set_password('employee123')
+            arun_user.status = 'Active'
+        else:
+            arun_user = User(name="Arun Kumar", username="arun.kumar", email="arun.kumar@company.com", role="Employee", status="Active")
+            arun_user.set_password("employee123")
+            db.session.add(arun_user)
+            created_count += 1
+
+        db.session.commit()
         if created_count > 0:
-            db.session.commit()
             print(f"[SUCCESS] Linked/created {created_count} individual employee user accounts.")
     except Exception as e:
         db.session.rollback()
