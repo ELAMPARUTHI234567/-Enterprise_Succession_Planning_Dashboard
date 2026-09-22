@@ -38,6 +38,7 @@ def get_dashboard_summary():
 
     roles = LeadershipRole.query.all()
     competencies = Competency.query.all()
+    comp_by_id = {c.id: c for c in competencies}
 
     high_readiness_count = 0
     med_readiness_count = 0
@@ -45,10 +46,22 @@ def get_dashboard_summary():
     all_readiness_scores = []
     top_candidates = []
 
-    default_role_id = roles[0].id if roles else 1
+    default_role = roles[0] if roles else None
+    default_role_id = default_role.id if default_role else 1
+    role_reqs = RoleCompetency.query.filter_by(role_id=default_role_id).all() if default_role else []
+
+    all_emp_comps = EmployeeCompetency.query.all()
+    emp_comp_map = {}
+    for ec in all_emp_comps:
+        emp_comp_map.setdefault(ec.employee_id, []).append(ec)
 
     for emp in employees:
-        r_info = calculate_successor_readiness(emp.id, default_role_id)
+        e_comps = emp_comp_map.get(emp.id, [])
+        r_info = calculate_successor_readiness(
+            emp.id, default_role_id,
+            employee=emp, role=default_role,
+            competencies=competencies, role_reqs=role_reqs, emp_scores=e_comps
+        )
         if r_info:
             all_readiness_scores.append(r_info["readiness_score"])
             lvl = r_info["readiness_level"]
@@ -64,13 +77,11 @@ def get_dashboard_summary():
     top_candidates.sort(key=lambda x: x["readiness_score"], reverse=True)
     top_candidates_slice = top_candidates[:5]
 
-    all_emp_comps = EmployeeCompetency.query.all()
     avg_comp_score = round(sum(ec.score for ec in all_emp_comps) / len(all_emp_comps), 2) if all_emp_comps else 78.5
 
     critical_gaps_count = 0
     comp_gap_aggregates = {c.name: {"current_total": 0.0, "required_score": 80.0, "count": 0} for c in competencies}
 
-    role_reqs = RoleCompetency.query.filter_by(role_id=default_role_id).all()
     role_req_dict = {rr.competency_id: rr.required_score for rr in role_reqs}
 
     for comp in competencies:
@@ -78,7 +89,7 @@ def get_dashboard_summary():
         comp_gap_aggregates[comp.name]["required_score"] = req_val
 
     for ec in all_emp_comps:
-        comp_obj = Competency.query.get(ec.competency_id)
+        comp_obj = comp_by_id.get(ec.competency_id)
         if comp_obj and comp_obj.name in comp_gap_aggregates:
             comp_gap_aggregates[comp_obj.name]["current_total"] += ec.score
             comp_gap_aggregates[comp_obj.name]["count"] += 1
