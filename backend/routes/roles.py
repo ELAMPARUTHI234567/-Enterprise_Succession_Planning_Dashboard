@@ -9,10 +9,17 @@ roles_bp = Blueprint('roles', __name__)
 @roles_bp.route('/roles', methods=['GET'])
 def get_roles():
     roles = LeadershipRole.query.order_by(LeadershipRole.id.asc()).all()
+    
+    # Bulk load all RoleCompetency records with eager-loaded Competency relation to avoid N+1 queries
+    all_reqs = RoleCompetency.query.options(db.joinedload(RoleCompetency.competency)).all()
+    reqs_by_role = {}
+    for req in all_reqs:
+        reqs_by_role.setdefault(req.role_id, []).append(req)
+
     result = []
     for r in roles:
         rd = r.to_dict()
-        reqs = RoleCompetency.query.filter_by(role_id=r.id).all()
+        reqs = reqs_by_role.get(r.id, [])
         rd["required_competencies"] = [req.to_dict() for req in reqs]
         result.append(rd)
 

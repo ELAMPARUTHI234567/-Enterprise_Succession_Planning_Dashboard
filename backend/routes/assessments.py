@@ -15,7 +15,11 @@ assessments_bp = Blueprint('assessments', __name__)
 
 @assessments_bp.route('/assessments', methods=['GET'])
 def get_assessments():
-    assessments = Assessment.query.order_by(Assessment.id.desc()).all()
+    assessments = Assessment.query.options(
+        db.joinedload(Assessment.role),
+        db.joinedload(Assessment.creator),
+        db.selectinload(Assessment.questions)
+    ).order_by(Assessment.id.desc()).all()
     return jsonify({
         "success": True,
         "data": [a.to_dict() for a in assessments]

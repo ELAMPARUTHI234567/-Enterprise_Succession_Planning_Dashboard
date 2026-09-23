@@ -71,16 +71,34 @@ def calculate_successor_readiness(employee_id, role_id, employee=None, role=None
 def get_ranked_successors_for_role(role_id):
     """
     Ranks all employees for a target leadership role sorted by highest readiness score first.
+    Pre-fetches all required data to execute in O(1) queries instead of O(N) database queries.
     """
+    from models.competency import Competency
+    from models.role_competency import RoleCompetency
+    from models.employee_competency import EmployeeCompetency
+
     role = LeadershipRole.query.get(role_id)
     if not role:
         return None
 
     employees = Employee.query.all()
+    competencies = Competency.query.all()
+    role_reqs = RoleCompetency.query.filter_by(role_id=role_id).all()
+    
+    all_emp_comps = EmployeeCompetency.query.all()
+    emp_comp_map = {}
+    for ec in all_emp_comps:
+        emp_comp_map.setdefault(ec.employee_id, []).append(ec)
+
     results = []
 
     for emp in employees:
-        res = calculate_successor_readiness(emp.id, role_id)
+        e_comps = emp_comp_map.get(emp.id, [])
+        res = calculate_successor_readiness(
+            emp.id, role_id,
+            employee=emp, role=role,
+            competencies=competencies, role_reqs=role_reqs, emp_scores=e_comps
+        )
         if res:
             results.append(res)
 

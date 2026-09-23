@@ -15,42 +15,50 @@ export const Successors = () => {
   const [mlPrediction, setMlPrediction] = useState(null);
   const [isMlModalOpen, setIsMlModalOpen] = useState(false);
 
-  const fetchRoles = async () => {
+  const initLoad = async () => {
     setLoading(true);
     try {
       const res = await roleService.getAll();
       if (res.success && res.data.length > 0) {
         setRoles(res.data);
-        setSelectedRoleId(res.data[0].id);
+        const initialRoleId = res.data[0].id;
+        setSelectedRoleId(initialRoleId);
+        
+        // Concurrently fetch successors for initial role without waiting for React state re-render cycle
+        const succRes = await successorService.getByRole(initialRoleId);
+        if (succRes.success) {
+          setSuccessorData(succRes.data);
+        }
       }
     } catch (err) {
-      alert(err.message);
+      console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchRoles();
+    initLoad();
   }, []);
 
-  const loadSuccessors = async () => {
-    if (!selectedRoleId) return;
+  const loadSuccessors = async (roleId) => {
+    const targetId = roleId || selectedRoleId;
+    if (!targetId) return;
     try {
-      const res = await successorService.getByRole(selectedRoleId);
+      const res = await successorService.getByRole(targetId);
       if (res.success) {
         setSuccessorData(res.data);
       }
     } catch (err) {
-      alert(err.message);
+      console.error(err);
     }
   };
 
-  useEffect(() => {
-    if (selectedRoleId) {
-      loadSuccessors();
-    }
-  }, [selectedRoleId]);
+  const handleRoleChange = (e) => {
+    const newRoleId = e.target.value;
+    setSelectedRoleId(newRoleId);
+    loadSuccessors(newRoleId);
+  };
 
   const handleTriggerMl = async (cand) => {
     setSelectedMlCand(cand);
@@ -87,7 +95,7 @@ export const Successors = () => {
           <span className="text-xs font-bold text-slate-700">Target Position:</span>
           <select
             value={selectedRoleId}
-            onChange={(e) => setSelectedRoleId(e.target.value)}
+            onChange={handleRoleChange}
             className="px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
           >
             {roles.map(r => (
