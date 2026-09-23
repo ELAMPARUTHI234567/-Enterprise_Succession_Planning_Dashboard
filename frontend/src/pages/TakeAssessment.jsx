@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { CheckCircle2, Clock, AlertTriangle, ArrowLeft, ArrowRight, Save, ShieldCheck, Loader2, Check } from 'lucide-react';
+import { CheckCircle2, Clock, AlertTriangle, ArrowLeft, ArrowRight, Save, ShieldCheck, Loader2, Check, Sparkles } from 'lucide-react';
 import { assessmentService } from '../services/api';
+import AssessmentResultView from '../components/AssessmentResultView';
 
 export const TakeAssessment = () => {
   const { assignmentId } = useParams();
@@ -37,6 +38,14 @@ export const TakeAssessment = () => {
           }
         });
         setAnswers(initialAnswers);
+
+        // If the assessment is already completed, fetch the full result details immediately
+        if (res.data.status === 'Completed') {
+          const resultRes = await assessmentService.getResult(assignmentId);
+          if (resultRes.success) {
+            setSubmittedResult(resultRes.data);
+          }
+        }
       } else {
         setError(res.message || 'Failed to load assessment data');
       }
@@ -53,7 +62,7 @@ export const TakeAssessment = () => {
 
   // Timer countdown hook
   useEffect(() => {
-    if (!assignment || submittedResult || timeLeft <= 0) return;
+    if (!assignment || submittedResult || timeLeft <= 0 || assignment?.status === 'Completed') return;
     const timer = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
@@ -86,7 +95,22 @@ export const TakeAssessment = () => {
     try {
       const res = await assessmentService.submitAssessment(assignmentId, answers);
       if (res.success) {
-        setSubmittedResult(res.data);
+        // Fetch full structured result details
+        const fullResultRes = await assessmentService.getResult(assignmentId);
+        if (fullResultRes.success) {
+          setSubmittedResult(fullResultRes.data);
+        } else {
+          setSubmittedResult({
+            overall_score: res.data.overall_score,
+            total_score: res.data.total_score,
+            total_possible: res.data.total_possible,
+            readiness_level: res.data.readiness_level,
+            detail: res.data.competency_scores,
+            assignment: assignment,
+            gap_analysis: res.data.updated_gaps,
+            readiness: res.data.updated_readiness
+          });
+        }
       } else {
         setError(res.message || 'Failed to submit assessment');
       }
@@ -108,42 +132,11 @@ export const TakeAssessment = () => {
 
   if (submittedResult) {
     return (
-      <div className="max-w-2xl mx-auto my-12 bg-white rounded-3xl p-8 border border-slate-200/80 card-shadow text-center space-y-6">
-        <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-md">
-          <CheckCircle2 className="w-10 h-10" />
-        </div>
-
-        <div>
-          <h2 className="text-2xl font-extrabold text-slate-900">Assessment Submitted Successfully</h2>
-          <p className="text-xs text-slate-500 mt-1">
-            Your competency evaluation has been processed and saved to the database.
-          </p>
-        </div>
-
-        <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200/80 grid grid-cols-2 gap-4">
-          <div>
-            <p className="text-[10px] font-bold text-slate-500 uppercase">Assessment Score</p>
-            <p className="text-3xl font-extrabold text-indigo-600 mt-1">{submittedResult.overall_score}%</p>
-          </div>
-          <div>
-            <p className="text-[10px] font-bold text-slate-500 uppercase">Readiness Level</p>
-            <p className="text-3xl font-extrabold text-emerald-600 mt-1">{submittedResult.readiness_level}</p>
-          </div>
-        </div>
-
-        <div className="text-left bg-indigo-50/60 p-4 rounded-xl border border-indigo-100 text-xs text-indigo-900 space-y-1">
-          <p className="font-bold flex items-center"><Sparkles className="w-4 h-4 mr-1.5 text-indigo-600" /> Automated Model Actions Completed:</p>
-          <p>• Employee competency scores updated in database</p>
-          <p>• Competency gap analysis recalculated against target role</p>
-          <p>• Successor readiness score updated automatically</p>
-        </div>
-
-        <button
-          onClick={() => navigate('/employee-dashboard')}
-          className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all shadow-md"
-        >
-          Return to My Dashboard
-        </button>
+      <div className="max-w-5xl mx-auto py-4">
+        <AssessmentResultView
+          result={submittedResult}
+          onBack={() => navigate('/employee-dashboard')}
+        />
       </div>
     );
   }

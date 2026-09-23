@@ -7,6 +7,7 @@ from models.employee_competency import EmployeeCompetency
 from models.competency import Competency
 from services.gap_service import calculate_competency_gaps
 from services.readiness_service import calculate_successor_readiness
+from services.ml_service import run_ml_readiness_prediction
 from utils.auth_middleware import get_current_user, require_role
 from datetime import datetime
 
@@ -135,17 +136,27 @@ def assign_assessment(assessment_id):
 def get_my_assessments():
     user, employee, err_msg, status = get_current_user()
     if err_msg:
-        # Fallback for unauthenticated query param if requested
-        requested_emp_id = request.args.get('employee_id', type=int)
-        if requested_emp_id:
-            assignments = AssessmentAssignment.query.filter_by(employee_id=requested_emp_id).order_by(AssessmentAssignment.id.desc()).all()
-            return jsonify({"success": True, "data": [a.to_dict() for a in assignments]}), 200
         return jsonify({"success": False, "message": err_msg}), status
 
     if not employee:
         return jsonify({"success": True, "data": []}), 200
 
-    assignments = AssessmentAssignment.query.filter_by(employee_id=employee.id).order_by(AssessmentAssignment.id.desc()).all()
+    # Data Isolation: Employees ALWAYS see only their own assessments derived from authenticated user identity
+    if user.role.lower() == 'employee':
+        target_emp_id = employee.id
+    else:
+        # HR or Manager can specify employee_id query param if permitted
+        requested_emp_id = request.args.get('employee_id', type=int)
+        if requested_emp_id:
+            if user.role.lower() == 'manager':
+                target_emp = Employee.query.get(requested_emp_id)
+                if not target_emp or (target_emp.manager_id != employee.id and target_emp.id != employee.id):
+                    return jsonify({"success": False, "message": "Access forbidden: Managers can only view team member assessments"}), 403
+            target_emp_id = requested_emp_id
+        else:
+            target_emp_id = employee.id
+
+    assignments = AssessmentAssignment.query.filter_by(employee_id=target_emp_id).order_by(AssessmentAssignment.id.desc()).all()
     return jsonify({
         "success": True,
         "data": [a.to_dict() for a in assignments]
@@ -166,6 +177,41 @@ def get_my_results():
         if a.result:
             rdata = a.result.to_dict()
             rdata["assignment"] = a.to_dict()
+
+            detail = rdata.get("detail", {})
+            total_score = detail.get("_total_score")
+            total_possible = detail.get("_total_possible")
+
+            if total_score is None or total_possible is None:
+                answers = AssessmentAnswer.query.filter_by(assignment_id=a.id).all()
+                if answers:
+                    total_score = sum(ans.score for ans in answers)
+                    total_possible = sum(ans.question.max_score for ans in answers if ans.question)
+                else:
+                    total_score = rdata.get("overall_score", 80.0)
+                    total_possible = 100.0
+
+            rdata["total_score"] = round(total_score, 2)
+            rdata["total_possible"] = round(total_possible, 2)
+
+            target_role_id = a.assessment.role_id if a.assessment else 1
+            gaps = calculate_competency_gaps(employee.id, target_role_id)
+            readiness = calculate_successor_readiness(employee.id, target_role_id)
+            rdata["gap_analysis"] = gaps
+            rdata["readiness"] = readiness
+
+            dev_areas = []
+            if gaps and "competencies" in gaps:
+                for c in gaps["competencies"]:
+                    if c.get("gap", 0) > 0:
+                        dev_areas.append({
+                            "competency": c.get("name"),
+                            "current_score": c.get("current_score"),
+                            "target_score": c.get("target_score"),
+                            "gap": c.get("gap")
+                        })
+            rdata["development_areas"] = dev_areas
+
             results.append(rdata)
 
     return jsonify({"success": True, "data": results}), 200
@@ -207,9 +253,13 @@ def get_assignment_detail(assignment_id):
         return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
 
     # Enforce data isolation: Employees can ONLY view their own assignments!
-    if user.role.lower() not in ['hr', 'admin', 'manager']:
-        if not employee or assignment.employee_id != employee.id:
-            return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's assessment"}), 403
+    if user.role.lower() not in ['hr', 'admin']:
+        if user.role.lower() == 'manager':
+            if not employee or (assignment.employee.manager_id != employee.id and assignment.employee_id != employee.id):
+                return jsonify({"success": False, "message": "Access forbidden: Managers can only view team member assessments"}), 403
+        else: # Employee
+            if not employee or assignment.employee_id != employee.id:
+                return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's assessment"}), 403
 
     data = assignment.to_dict()
     questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).order_by(AssessmentQuestion.order_index.asc()).all()
@@ -230,10 +280,14 @@ def submit_assessment(assignment_id):
     if not assignment:
         return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
 
-    # Enforce data isolation: Employees can ONLY submit their own assignments!
-    if user.role.lower() not in ['hr', 'admin', 'manager']:
-        if not employee or assignment.employee_id != employee.id:
-            return jsonify({"success": False, "message": "Access forbidden: You cannot submit an assessment assigned to another employee"}), 403
+    # Enforce strict data isolation: Employees can ONLY submit their own assignments!
+    if user.role.lower() not in ['hr', 'admin']:
+        if user.role.lower() == 'manager':
+            if not employee or (assignment.employee.manager_id != employee.id and assignment.employee_id != employee.id):
+                return jsonify({"success": False, "message": "Access forbidden: You cannot submit an assessment assigned to another employee"}), 403
+        else: # Employee
+            if not employee or assignment.employee_id != employee.id:
+                return jsonify({"success": False, "message": "Access forbidden: You cannot submit an assessment assigned to another employee"}), 403
 
     data = request.get_json() or {}
     answers_input = data.get('answers', {})
@@ -300,12 +354,9 @@ def submit_assessment(assignment_id):
     result.readiness_level = readiness_lvl
     result.completed_at = datetime.utcnow()
 
-    detail = {}
+    # Update Employee Competency Scores in database
     for cid, sc_data in competency_scores_map.items():
-        comp = Competency.query.get(cid)
-        cname = comp.name if comp else f"Comp #{cid}"
         calc_pct = round((sc_data["total"] / sc_data["possible"] * 100.0), 2) if sc_data["possible"] > 0 else overall_score
-        detail[cname] = calc_pct
 
         emp_comp = EmployeeCompetency.query.filter_by(
             employee_id=assignment.employee_id, competency_id=cid
@@ -317,11 +368,25 @@ def submit_assessment(assignment_id):
                 employee_id=assignment.employee_id, competency_id=cid, score=calc_pct
             ))
 
+    # Fetch updated competency ratings for all competencies
+    all_competencies = Competency.query.all()
+    emp_competencies = EmployeeCompetency.query.filter_by(employee_id=assignment.employee_id).all()
+    emp_comp_dict = {ec.competency_id: ec.score for ec in emp_competencies}
+
+    detail = {}
+    for comp in all_competencies:
+        detail[comp.name] = emp_comp_dict.get(comp.id, overall_score)
+
+    detail["_total_score"] = round(total_achieved, 2)
+    detail["_total_possible"] = round(total_possible, 2)
+
     result.set_detail(detail)
     db.session.commit()
 
-    updated_gap = calculate_competency_gaps(assignment.employee_id, assignment.assessment.role_id if assignment.assessment else 1)
-    updated_readiness = calculate_successor_readiness(assignment.employee_id, assignment.assessment.role_id if assignment.assessment else 1)
+    target_role_id = assignment.assessment.role_id if assignment.assessment else 1
+    updated_gap = calculate_competency_gaps(assignment.employee_id, target_role_id)
+    updated_readiness = calculate_successor_readiness(assignment.employee_id, target_role_id)
+    ml_prediction = run_ml_readiness_prediction(assignment.employee_id, target_role_id)
 
     return jsonify({
         "success": True,
@@ -329,10 +394,13 @@ def submit_assessment(assignment_id):
         "data": {
             "assignment_id": assignment_id,
             "overall_score": overall_score,
+            "total_score": round(total_achieved, 2),
+            "total_possible": round(total_possible, 2),
             "readiness_level": readiness_lvl,
             "competency_scores": detail,
             "updated_readiness": updated_readiness,
-            "updated_gaps": updated_gap
+            "updated_gaps": updated_gap,
+            "ml_prediction": ml_prediction
         }
     }), 200
 
@@ -346,9 +414,14 @@ def get_assessment_result(assignment_id):
     if not assignment:
         return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
 
-    if user.role.lower() not in ['hr', 'admin', 'manager']:
-        if not employee or assignment.employee_id != employee.id:
-            return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's result"}), 403
+    # Enforce data isolation: Employee can view ONLY their own results! Manager can view direct reports' results.
+    if user.role.lower() not in ['hr', 'admin']:
+        if user.role.lower() == 'manager':
+            if not employee or (assignment.employee.manager_id != employee.id and assignment.employee_id != employee.id):
+                return jsonify({"success": False, "message": "Access forbidden: Managers can only view team member results"}), 403
+        else: # Employee
+            if not employee or assignment.employee_id != employee.id:
+                return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's result"}), 403
 
     if not assignment.result:
         return jsonify({"success": False, "message": "Assessment has not been completed yet"}), 400
@@ -356,7 +429,43 @@ def get_assessment_result(assignment_id):
     data = assignment.result.to_dict()
     data["assignment"] = assignment.to_dict()
 
+    detail = data.get("detail", {})
+    total_score = detail.get("_total_score")
+    total_possible = detail.get("_total_possible")
+
+    if total_score is None or total_possible is None:
+        answers = AssessmentAnswer.query.filter_by(assignment_id=assignment_id).all()
+        if answers:
+            total_score = sum(ans.score for ans in answers)
+            total_possible = sum(ans.question.max_score for ans in answers if ans.question)
+        else:
+            total_score = data.get("overall_score", 80.0)
+            total_possible = 100.0
+
+    data["total_score"] = round(total_score, 2)
+    data["total_possible"] = round(total_possible, 2)
+
+    target_role_id = assignment.assessment.role_id if assignment.assessment else 1
+    gaps = calculate_competency_gaps(assignment.employee_id, target_role_id)
+    readiness = calculate_successor_readiness(assignment.employee_id, target_role_id)
+    
+    data["gap_analysis"] = gaps
+    data["readiness"] = readiness
+
+    dev_areas = []
+    if gaps and "competencies" in gaps:
+        for c in gaps["competencies"]:
+            if c.get("gap", 0) > 0:
+                dev_areas.append({
+                    "competency": c.get("name"),
+                    "current_score": c.get("current_score"),
+                    "target_score": c.get("target_score"),
+                    "gap": c.get("gap")
+                })
+    data["development_areas"] = dev_areas
+
     return jsonify({
         "success": True,
         "data": data
     }), 200
+

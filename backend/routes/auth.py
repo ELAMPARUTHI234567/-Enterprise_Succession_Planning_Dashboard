@@ -1,7 +1,10 @@
+import jwt
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from models.user import User
 from models.employee import Employee
 from extensions import db
+from config import Config
 from utils.auth_middleware import get_current_user, require_role
 
 auth_bp = Blueprint('auth', __name__)
@@ -34,27 +37,30 @@ def login():
             if user.status != 'Active':
                 return jsonify({"success": False, "message": "Account is deactivated. Contact HR administrator."}), 403
 
-            # Check role if role_hint provided (allow HR/Admin equivalence)
-            user_role_lower = user.role.lower()
-            if role_hint and role_hint != user_role_lower:
-                if not (role_hint in ['hr', 'admin'] and user_role_lower in ['hr', 'admin']):
-                    # Check if requested role hint matches user's linked employee profile
-                    print(f"[INFO] Login role hint '{role_hint}' vs DB user role '{user.role}'")
-
             # Check password
             pwd_valid = user.check_password(password)
             if not pwd_valid:
-                # Direct fallback for standard initial passwords if hash check fails
-                if (password == 'employee123' and user_role_lower == 'employee') or \
-                   (password == 'manager123' and user_role_lower == 'manager') or \
-                   (password == 'hr123' and user_role_lower in ['hr', 'admin']):
+                # Direct update for standard initial passwords if hash check fails
+                if (password == 'employee123' and user.role.lower() == 'employee') or \
+                   (password == 'manager123' and user.role.lower() == 'manager') or \
+                   (password == 'hr123' and user.role.lower() in ['hr', 'admin']):
                     pwd_valid = True
                     user.set_password(password)
                     db.session.commit()
 
             if pwd_valid:
                 user_dict = user.to_dict()
-                token = f"jwt-token-enterprise-{user.role.lower()}-{user.id}"
+
+                # Generate real, cryptographically signed JWT with expiration
+                payload = {
+                    "sub": str(user.id),
+                    "username": user.username,
+                    "role": user.role,
+                    "iat": datetime.now(timezone.utc),
+                    "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+                }
+                token = jwt.encode(payload, Config.JWT_SECRET_KEY, algorithm="HS256")
+
                 return jsonify({
                     "success": True,
                     "data": {
@@ -65,39 +71,6 @@ def login():
                 }), 200
     except Exception as db_err:
         print(f"[WARNING] Database query error in login: {db_err}")
-
-    # Fallback Account Check for Demo Credentials
-    demo_users = {
-        'hr': ('hr123', 'HR', 1, 'Sarah Jenkins (HR Director)', 'hr@company.com', 1),
-        'manager': ('manager123', 'Manager', 2, 'Sneha Reddy (Engineering Manager)', 'manager@company.com', 4),
-        'employee': ('employee123', 'Employee', 3, 'Arun Kumar (Senior Developer)', 'employee@company.com', 1),
-        'admin': ('admin123', 'HR', 4, 'System Administrator', 'admin@company.com', 1),
-        'arun.kumar': ('employee123', 'Employee', 3, 'Arun Kumar', 'arun.kumar@company.com', 1),
-        'priya.sharma': ('employee123', 'Employee', 5, 'Priya Sharma', 'priya.sharma@company.com', 2),
-        'rajesh.patel': ('employee123', 'Employee', 6, 'Rajesh Patel', 'rajesh.patel@company.com', 3),
-        'sneha.reddy': ('manager123', 'Manager', 2, 'Sneha Reddy', 'sneha.reddy@company.com', 4),
-        'vikram.singh': ('employee123', 'Employee', 7, 'Vikram Singh', 'vikram.singh@company.com', 5)
-    }
-
-    if username_or_email in demo_users:
-        pwd, r, uid, name, email, emp_id = demo_users[username_or_email]
-        if password == pwd:
-            return jsonify({
-                "success": True,
-                "data": {
-                    "user": {
-                        "id": uid,
-                        "name": name,
-                        "username": username_or_email,
-                        "email": email,
-                        "role": r,
-                        "status": "Active",
-                        "employee_id": emp_id
-                    },
-                    "token": f"jwt-token-enterprise-{r.lower()}-{uid}",
-                    "message": f"Login successful as {r}"
-                }
-            }), 200
 
     return jsonify({"success": False, "message": "Invalid username/email or password"}), 401
 

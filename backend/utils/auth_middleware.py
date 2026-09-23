@@ -1,16 +1,17 @@
+import jwt
+from datetime import datetime, timezone
 from flask import request, jsonify
 from models.user import User
 from models.employee import Employee
-from extensions import db
+from config import Config
 
 def get_current_user():
     """
-    Extracts the authenticated user and employee profile from the Bearer token in request headers.
+    Extracts and cryptographically verifies the Bearer JWT token from request headers.
     Returns (user, employee, error_message, status_code)
     """
     auth_header = request.headers.get('Authorization', '')
     if not auth_header:
-        # Fallback query param for quick dev/testing if header not present
         token = request.args.get('token', '')
     else:
         token = auth_header.replace('Bearer ', '').strip()
@@ -19,21 +20,28 @@ def get_current_user():
         return None, None, "Missing authorization token", 401
 
     try:
-        # Token format: jwt-token-enterprise-{role}-{user_id} or legacy format
-        parts = token.split('-')
-        user_id = None
-        for p in reversed(parts):
-            if p.isdigit():
-                user_id = int(p)
-                break
+        # Decode and cryptographically verify JWT token signature and expiration
+        payload = jwt.decode(
+            token,
+            Config.JWT_SECRET_KEY,
+            algorithms=["HS256"]
+        )
 
-        if not user_id:
-            user = User.query.first()
-        else:
-            user = User.query.get(user_id)
+        sub_val = payload.get("sub")
+        token_role = payload.get("role", "").lower()
 
+        if not sub_val:
+            return None, None, "Invalid token payload", 401
+
+        user_id = int(sub_val)
+        user = User.query.get(user_id)
         if not user:
             return None, None, "User account not found or deactivated", 401
+
+        user_role_lower = user.role.lower()
+        if token_role != user_role_lower:
+            if not (token_role in ['hr', 'admin'] and user_role_lower in ['hr', 'admin']):
+                return None, None, "Invalid token role signature", 401
 
         if user.status != 'Active':
             return None, None, "Account is deactivated. Please contact HR.", 403
@@ -45,6 +53,10 @@ def get_current_user():
 
         return user, employee, None, 200
 
+    except jwt.ExpiredSignatureError:
+        return None, None, "Authorization token has expired. Please log in again.", 401
+    except jwt.InvalidTokenError:
+        return None, None, "Invalid authorization token signature", 401
     except Exception as e:
         return None, None, f"Authentication error: {str(e)}", 401
 

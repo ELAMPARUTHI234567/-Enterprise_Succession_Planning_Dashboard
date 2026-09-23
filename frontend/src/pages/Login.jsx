@@ -70,7 +70,9 @@ export const Login = () => {
         setError(res.message || 'Invalid username or password');
       }
     } catch (err) {
-      setError(err.message || 'Unable to connect to the server. Please check the backend connection.');
+      const rawMsg = err.message || '';
+      const cleanMsg = rawMsg.replace(/^\[HTTP \d+\]\s*/, '');
+      setError(cleanMsg || 'Invalid username or password. Please try again.');
     } finally {
       setLoading(false);
     }

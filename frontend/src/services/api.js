@@ -43,12 +43,22 @@ api.interceptors.response.use(
 
     console.error(`[API Error Diagnostic] Status: ${status} | Code: ${errCode} | Message: ${errMessage} | Details: ${responseData || 'N/A'} | Target: ${API_BASE_URL}${error.config?.url || ''}`);
 
-    if (responseData) {
-      return Promise.reject(new Error(responseData));
+    if (error.response) {
+      if (error.response.status === 401) {
+        if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
+          localStorage.removeItem('succession_token');
+          localStorage.removeItem('succession_user');
+          window.location.href = '/login';
+        }
+      }
+      const detailStr = responseData || error.response.statusText || errMessage;
+      return Promise.reject(new Error(`[HTTP ${error.response.status}] ${detailStr}`));
     }
+
     if (error.code === 'ERR_NETWORK' || !error.response) {
-      return Promise.reject(new Error('Unable to connect to the server. Please check the backend connection.'));
+      return Promise.reject(new Error(`Unable to connect to backend server at ${API_BASE_URL}. Please check if backend is running on http://localhost:5000.`));
     }
+
     return Promise.reject(new Error(errMessage));
   }
 );

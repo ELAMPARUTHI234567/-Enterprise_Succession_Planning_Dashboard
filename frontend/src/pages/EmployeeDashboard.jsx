@@ -553,21 +553,35 @@ export const EmployeeDashboard = () => {
           </div>
 
           <div className="space-y-4">
-            {completedAssessments.map((ass) => (
-              <div key={ass.id} className="p-5 bg-indigo-50/50 rounded-2xl border border-indigo-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <span className="text-xs font-extrabold text-indigo-600 uppercase tracking-wider">Evaluation Completed</span>
-                  <h4 className="text-base font-extrabold text-slate-900">{ass.assessment_title}</h4>
-                  <p className="text-xs text-slate-500">Evaluated for role: {ass.role_name}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-3xl font-extrabold text-indigo-600">85<span className="text-sm font-semibold text-slate-500">/100</span></p>
-                  <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    Grade A - Qualified
-                  </span>
-                </div>
+            {completedAssessments.length === 0 ? (
+              <div className="p-8 text-center text-slate-500 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs font-semibold">
+                No completed assessments found yet. Complete assigned assessments to view detailed results.
               </div>
-            ))}
+            ) : (
+              completedAssessments.map((ass) => (
+                <div key={ass.id} className="p-5 bg-indigo-50/50 rounded-2xl border border-indigo-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <span className="text-xs font-extrabold text-indigo-600 uppercase tracking-wider">Evaluation Completed</span>
+                    <h4 className="text-base font-extrabold text-slate-900">{ass.assessment_title}</h4>
+                    <p className="text-xs text-slate-500">Evaluated for role: {ass.role_name || 'Target Leadership Role'}</p>
+                  </div>
+                  <div className="flex items-center space-x-4">
+                    <div className="text-right">
+                      <p className="text-3xl font-extrabold text-indigo-600">{ass.overall_score || ass.result?.overall_score || 85}<span className="text-sm font-semibold text-slate-500">%</span></p>
+                      <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                        Completed
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => navigate(`/take-assessment/${ass.id}`)}
+                      className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md transition-all"
+                    >
+                      View Results
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}

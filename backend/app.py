@@ -39,6 +39,7 @@ def create_app():
         "http://localhost:3000",
         "https://enterprise-succession-dashboard.vercel.app",
         "https://enterprise-succession-planning-dashboard.vercel.app",
+        "https://enterprise-succession-planning-dash.vercel.app",
         re.compile(r"https://.*\.vercel\.app")
     ]
     cors_origins_raw = Config.CORS_ORIGINS
