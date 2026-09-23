@@ -33,6 +33,9 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (axios.isCancel(error) || error.code === 'ERR_CANCELED') {
+      return Promise.reject(error);
+    }
     const status = error.response ? error.response.status : (error.request ? 'NO_RESPONSE' : 'REQUEST_SETUP_ERROR');
     const responseData = error.response?.data?.message || error.response?.data?.error || null;
     const errCode = error.code || 'UNKNOWN_CODE';
@@ -64,8 +67,8 @@ export const authService = {
 };
 
 export const employeeService = {
-  getAll: (params) => api.get('/employees', { params }),
-  getById: (id, roleId = 1) => api.get(`/employees/${id}`, { params: { role_id: roleId } }),
+  getAll: (params, config = {}) => api.get('/employees', { params, ...config }),
+  getById: (id, roleId = 1, config = {}) => api.get(`/employees/${id}`, { params: { role_id: roleId }, ...config }),
   create: (data) => api.post('/employees', data),
   update: (id, data) => api.put(`/employees/${id}`, data),
   delete: (id) => api.delete(`/employees/${id}`),

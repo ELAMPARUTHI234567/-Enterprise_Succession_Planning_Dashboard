@@ -4,6 +4,7 @@ import { Users, Plus, Search, Filter, Eye, Edit2, Trash2, Loader2, CheckCircle2,
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
 import { employeeService } from '../services/api';
+import axios from 'axios';
 
 export const Employees = () => {
   const [employees, setEmployees] = useState([]);
@@ -33,22 +34,34 @@ export const Employees = () => {
   const [formError, setFormError] = useState('');
   const navigate = useNavigate();
 
-  const fetchEmployees = async () => {
+  const fetchEmployees = async (signal) => {
     setLoading(true);
+    setError('');
     try {
-      const res = await employeeService.getAll({ search, department });
-      if (res.success) {
+      const res = await employeeService.getAll({ search, department }, { signal });
+      if (res && res.success) {
         setEmployees(res.data);
       }
     } catch (err) {
-      setError(err.message);
+      if (axios.isCancel(err) || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') {
+        // Request was intentionally canceled due to component unmount or fast filter changes.
+        return;
+      }
+      setError(err?.message || 'Failed to load employees');
     } finally {
-      setLoading(false);
+      if (!signal || !signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchEmployees();
+    const controller = new AbortController();
+    fetchEmployees(controller.signal);
+
+    return () => {
+      controller.abort();
+    };
   }, [search, department]);
 
   const handleOpenAddModal = () => {
@@ -153,6 +166,13 @@ export const Employees = () => {
           <span>Add New Employee</span>
         </button>
       </div>
+
+      {error && (
+        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium rounded-xl flex items-center space-x-2">
+          <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Filter and Search Toolbar */}
       <div className="bg-white rounded-xl p-4 border border-slate-200/80 card-shadow flex flex-col sm:flex-row items-center justify-between gap-4">
