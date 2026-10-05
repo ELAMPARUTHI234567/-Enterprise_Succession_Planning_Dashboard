@@ -8,7 +8,7 @@ from models.employee_competency import EmployeeCompetency
 from models.assessment import Assessment, AssessmentQuestion, AssessmentAssignment, AssessmentAnswer, AssessmentResult
 from models.successor_result import SuccessorResult
 from models.ml_prediction import MLPrediction
-from datetime import datetime, timedelta
+from utils.seed_question_bank import seed_question_bank
 
 def seed_database_if_empty():
     """
@@ -16,7 +16,8 @@ def seed_database_if_empty():
     20 sample employees, leadership roles, competencies, sample assessments, questions, and assignments.
     """
     if User.query.first() is not None:
-        print("[INFO] Database already contains data. Skipping auto-seed.")
+        print("[INFO] Database already contains data. Verifying built-in Question Bank...")
+        seed_question_bank()
         return
 
     print("[INFO] Seeding initial demonstration data into database...")
@@ -188,7 +189,7 @@ def seed_database_if_empty():
     q2 = AssessmentQuestion(
         assessment_id=ass1.id,
         question="When faced with a sudden 20% budget reduction mid-project, what is your primary strategic action?",
-        question_type="Scenario-Based Question",
+        question_type="Multiple Choice",
         competency_id=5, # Strategic Thinking
         max_score=10.0,
         correct_answer="B",
@@ -221,15 +222,20 @@ def seed_database_if_empty():
 
     q4 = AssessmentQuestion(
         assessment_id=ass1.id,
-        question="Effective leadership requires balancing technical excellence with team morale and burnout prevention.",
-        question_type="Yes/No",
+        question="How do you balance technical excellence with team morale and burnout prevention during critical project phases?",
+        question_type="Multiple Choice",
         competency_id=1, # Leadership
         max_score=10.0,
-        correct_answer="Yes",
-        difficulty="Easy",
+        correct_answer="A",
+        difficulty="Medium",
         order_index=4
     )
-    q4.set_options(["Yes", "No"])
+    q4.set_options([
+        "A. Establish clear priorities, enable continuous feedback, and provide realistic milestone targets",
+        "B. Enforce strict mandatory weekend overtime without workload adjustments",
+        "C. Lower code quality standards permanently to eliminate delivery pressure",
+        "D. Avoid monitoring team workload and let individuals manage burnout on their own"
+    ])
 
     db.session.add_all([q1, q2, q3, q4])
     db.session.commit()
@@ -269,6 +275,8 @@ def seed_database_if_empty():
 
     # Auto-sync all employee user accounts
     sync_employee_users()
+    # Seed built-in question bank for all leadership roles
+    seed_question_bank()
 
 def sync_employee_users():
     """

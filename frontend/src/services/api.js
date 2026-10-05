@@ -56,7 +56,7 @@ api.interceptors.response.use(
     }
 
     if (error.code === 'ERR_NETWORK' || !error.response) {
-      return Promise.reject(new Error(`Unable to connect to backend server at ${API_BASE_URL}. Please check if backend is running on http://localhost:5000.`));
+      return Promise.reject(new Error(`Network / CORS communication error connecting to backend API at ${API_BASE_URL}. Verify backend service health and CORS settings.`));
     }
 
     return Promise.reject(new Error(errMessage));
@@ -111,6 +111,7 @@ export const assessmentService = {
   getAssignmentDetail: (assignmentId) => api.get(`/assessment-assignments/${assignmentId}`),
   submitAssessment: (assignmentId, answers) => api.post(`/assessment-assignments/${assignmentId}/submit`, { answers }),
   getResult: (assignmentId) => api.get(`/assessment-results/${assignmentId}`),
+  getCompletedResults: (params) => api.get('/assessment-results', { params }),
 };
 
 export const gapService = {
@@ -144,6 +145,16 @@ export const mlService = {
 export const reportService = {
   getSummary: () => api.get('/reports/summary'),
   getExportUrl: (type = 'readiness') => `${API_BASE_URL}/reports/export-csv?type=${type}`,
+};
+
+export const questionBankService = {
+  getSummary: () => api.get('/question-bank/summary'),
+  getByRole: (roleId) => api.get(`/question-bank/roles/${roleId}`),
+  getAll: (params) => api.get('/question-bank', { params }),
+  createQuestion: (data) => api.post('/question-bank', data),
+  updateQuestion: (id, data) => api.put(`/question-bank/${id}`, data),
+  deleteQuestion: (id) => api.delete(`/question-bank/${id}`),
+  createAssessment: (data) => api.post('/question-bank/create-assessment', data),
 };
 
 export default api;

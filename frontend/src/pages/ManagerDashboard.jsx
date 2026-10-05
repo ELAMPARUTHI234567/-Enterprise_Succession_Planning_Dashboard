@@ -1,16 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Award, ShieldAlert, UserCheck, TrendingUp, RefreshCw, ArrowRight, CheckCircle2, Clock, PlusCircle } from 'lucide-react';
+import { 
+  Users, Award, ShieldAlert, UserCheck, TrendingUp, RefreshCw, ArrowRight, 
+  CheckCircle2, Clock, PlusCircle, Eye, Search, BarChart2, Cpu, X 
+} from 'lucide-react';
 import StatCard from '../components/StatCard';
 import StatusBadge from '../components/StatusBadge';
 import CompetencyBarChart from '../charts/CompetencyBarChart';
 import ReadinessPieChart from '../charts/ReadinessPieChart';
-import { dashboardService, employeeService } from '../services/api';
+import AssessmentResultView from '../components/AssessmentResultView';
+import { dashboardService, employeeService, assessmentService } from '../services/api';
 
 export const ManagerDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [teamMembers, setTeamMembers] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [teamResults, setTeamResults] = useState([]);
+  const [selectedResult, setSelectedResult] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterRole, setFilterRole] = useState('');
+  const [filterReadiness, setFilterReadiness] = useState('');
   const [error, setError] = useState('');
   const navigate = useNavigate();
 
@@ -22,15 +31,20 @@ export const ManagerDashboard = () => {
     setError('');
     try {
       // Get manager's team members
-      const teamRes = await employeeService.getAll({ manager_id: user.employee_id || 4 });
+      const [teamRes, sumRes, resultsRes] = await Promise.all([
+        employeeService.getAll({ manager_id: user.employee_id || 4 }),
+        dashboardService.getSummary({ manager_id: user.employee_id || 4 }),
+        assessmentService.getCompletedResults() // Backend enforces RBAC: returns team members' results only!
+      ]);
+
       if (teamRes.success) {
         setTeamMembers(teamRes.data || []);
       }
-
-      // Get manager dashboard summary
-      const sumRes = await dashboardService.getSummary({ manager_id: user.employee_id || 4 });
       if (sumRes.success) {
         setSummary(sumRes.data);
+      }
+      if (resultsRes.success) {
+        setTeamResults(resultsRes.data || []);
       }
     } catch (err) {
       setError(err.message || 'Error loading manager team data');
@@ -43,11 +57,36 @@ export const ManagerDashboard = () => {
     fetchManagerData();
   }, []);
 
+  // Filter team results
+  const filteredTeamResults = teamResults.filter(r => {
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchName = (r.employee_name || '').toLowerCase().includes(q);
+      const matchCode = (r.employee_code || '').toLowerCase().includes(q);
+      const matchTitle = (r.assessment_title || '').toLowerCase().includes(q);
+      if (!matchName && !matchCode && !matchTitle) return false;
+    }
+    if (filterRole && r.role_id !== Number(filterRole)) return false;
+    if (filterReadiness && r.readiness_level !== filterReadiness) return false;
+    return true;
+  });
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-96">
         <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mb-3" />
         <p className="text-xs font-semibold text-slate-500">Loading Manager Team Dashboard...</p>
+      </div>
+    );
+  }
+
+  if (selectedResult) {
+    return (
+      <div className="font-sans">
+        <AssessmentResultView
+          result={selectedResult}
+          onBack={() => setSelectedResult(null)}
+        />
       </div>
     );
   }
@@ -73,7 +112,6 @@ export const ManagerDashboard = () => {
 
   const kpis = summary?.kpis || {};
   const charts = summary?.charts || {};
-  const topSuccessors = summary?.top_successors || [];
 
   return (
     <div className="space-y-6 font-sans">
@@ -84,9 +122,9 @@ export const ManagerDashboard = () => {
             <Users className="w-3.5 h-3.5" />
             <span>Team Manager Access • {user.name || 'Manager'}</span>
           </div>
-          <h2 className="text-2xl font-extrabold tracking-tight">Team Competency &amp; Readiness Dashboard</h2>
+          <h2 className="text-2xl font-extrabold tracking-tight">Team Competency &amp; Assessment Dashboard</h2>
           <p className="text-xs text-indigo-200 mt-1 max-w-2xl">
-            Monitor direct reports, create targeted team assessments, analyze competency gaps, and track successor readiness levels.
+            Monitor direct reports, review authorized completed assessment results, analyze competency gaps, and view AI readiness predictions.
           </p>
         </div>
 
@@ -124,8 +162,8 @@ export const ManagerDashboard = () => {
           color="amber"
         />
         <StatCard
-          title="Completed Assessments"
-          value={kpis.completed_assessments || 2}
+          title="Completed Team Results"
+          value={teamResults.length || kpis.completed_assessments || 2}
           subtitle="Processed results on file"
           icon={CheckCircle2}
           color="emerald"
@@ -137,6 +175,114 @@ export const ManagerDashboard = () => {
           icon={TrendingUp}
           color="blue"
         />
+      </div>
+
+      {/* SECTION 1: AUTHORIZED TEAM EMPLOYEE ASSESSMENT RESULTS */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 card-shadow overflow-hidden space-y-4 p-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-100 gap-4">
+          <div>
+            <div className="flex items-center space-x-2">
+              <Award className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-base font-extrabold text-slate-900">Authorized Team Member Assessment Results</h3>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Results and AI ML readiness analysis for direct reports under your management scope.
+            </p>
+          </div>
+
+          {/* Search & Filter Inputs */}
+          <div className="flex items-center space-x-2 flex-wrap gap-2">
+            <div className="flex items-center space-x-1.5 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+              <Search className="w-3.5 h-3.5 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search team member..."
+                className="bg-transparent text-xs font-medium text-slate-900 focus:outline-none w-36"
+              />
+            </div>
+
+            <select
+              value={filterReadiness}
+              onChange={(e) => setFilterReadiness(e.target.value)}
+              className="bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 rounded-xl px-3 py-1.5 focus:outline-none"
+            >
+              <option value="">All Readiness Levels</option>
+              <option value="High">High Readiness</option>
+              <option value="Medium">Medium Readiness</option>
+              <option value="Low">Low Readiness</option>
+            </select>
+          </div>
+        </div>
+
+        {filteredTeamResults.length === 0 ? (
+          <div className="py-10 text-center text-slate-400">
+            <CheckCircle2 className="w-8 h-8 mx-auto mb-2 opacity-40 text-indigo-500" />
+            <p className="text-xs font-semibold text-slate-700">No team assessment results match your criteria.</p>
+            <p className="text-[11px] font-normal text-slate-500 mt-1">Assignments completed by your direct reports will automatically appear here.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200/60">
+                <tr>
+                  <th className="px-5 py-3">Team Member</th>
+                  <th className="px-5 py-3">Assessment Title</th>
+                  <th className="px-5 py-3">Target Role</th>
+                  <th className="px-5 py-3">Submission Date</th>
+                  <th className="px-5 py-3">Score %</th>
+                  <th className="px-5 py-3">Calculated Readiness</th>
+                  <th className="px-5 py-3">AI ML Prediction</th>
+                  <th className="px-5 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                {filteredTeamResults.map((res) => {
+                  const formattedDate = res.submission_date
+                    ? new Date(res.submission_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                    : 'Recently Completed';
+                  const mlClass = res.ml_prediction?.predicted_class || res.ml_prediction?.data?.predicted_class || res.readiness_level;
+
+                  return (
+                    <tr key={res.id || res.assignment_id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="px-5 py-3.5">
+                        <div>
+                          <p className="font-bold text-slate-900 text-xs">{res.employee_name}</p>
+                          <p className="text-[10px] text-slate-500">{res.employee_code} • {res.designation || 'Specialist'}</p>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5 font-semibold text-slate-800">{res.assessment_title}</td>
+                      <td className="px-5 py-3.5 font-bold text-indigo-700">{res.role_name}</td>
+                      <td className="px-5 py-3.5 text-slate-600">{formattedDate}</td>
+                      <td className="px-5 py-3.5 font-extrabold text-indigo-700 text-sm">{res.overall_score}%</td>
+                      <td className="px-5 py-3.5">
+                        <StatusBadge status={res.readiness_level || 'High'} type="readiness" />
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${
+                          mlClass === 'High' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                          mlClass === 'Medium' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-rose-50 text-rose-800 border-rose-200'
+                        }`}>
+                          ML: {mlClass}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 text-right">
+                        <button
+                          onClick={() => setSelectedResult(res)}
+                          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm transition-colors inline-flex items-center space-x-1"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>View Results</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Charts Section */}

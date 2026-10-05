@@ -54,6 +54,7 @@ class AssessmentQuestion(db.Model):
     max_score = db.Column(db.Float, default=10.0, nullable=False)
     options_json = db.Column(db.Text, nullable=True) # JSON array of options e.g. ["Option A", "Option B"]
     correct_answer = db.Column(db.Text, nullable=True) # Correct option string or code e.g. "B" or "Discuss with both..."
+    explanation = db.Column(db.Text, nullable=True) # Detailed explanation of the correct answer
     difficulty = db.Column(db.String(20), default='Medium', nullable=False) # 'Easy', 'Medium', 'Hard'
     order_index = db.Column(db.Integer, default=1, nullable=False)
 
@@ -70,8 +71,8 @@ class AssessmentQuestion(db.Model):
         except Exception:
             return []
 
-    def to_dict(self):
-        return {
+    def to_dict(self, include_correct=False):
+        d = {
             "id": self.id,
             "assessment_id": self.assessment_id,
             "question": self.question,
@@ -80,10 +81,13 @@ class AssessmentQuestion(db.Model):
             "competency_name": self.competency.name if self.competency else "General Leadership",
             "max_score": self.max_score,
             "options": self.get_options(),
-            "correct_answer": self.correct_answer or "",
             "difficulty": self.difficulty,
             "order_index": self.order_index
         }
+        if include_correct:
+            d["correct_answer"] = self.correct_answer or ""
+            d["explanation"] = self.explanation or ""
+        return d
 
 class AssessmentAssignment(db.Model):
     __tablename__ = 'assessment_assignments'

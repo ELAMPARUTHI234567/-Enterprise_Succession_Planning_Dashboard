@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from extensions import db
 from models.assessment import Assessment, AssessmentQuestion, AssessmentAssignment, AssessmentAnswer, AssessmentResult
+from models.ml_prediction import MLPrediction
 from models.employee import Employee
 from models.role import LeadershipRole
 from models.employee_competency import EmployeeCompetency
@@ -266,8 +267,38 @@ def get_assignment_detail(assignment_id):
                 return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's assessment"}), 403
 
     data = assignment.to_dict()
-    questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).order_by(AssessmentQuestion.order_index.asc()).all()
-    data["questions"] = [q.to_dict() for q in questions]
+    all_questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).order_by(AssessmentQuestion.order_index.asc()).all()
+    
+    # Requirement 1 & 16: Return ONLY MCQ questions for employee assessment
+    mcq_questions = [q for q in all_questions if q.question_type and q.question_type.lower() in ['multiple choice', 'mcq']]
+    
+    # Requirement 9 & 10: Format MCQ questions and strip correct_answer for security
+    formatted_questions = []
+    labels = ["A", "B", "C", "D", "E", "F"]
+    for q in mcq_questions:
+        q_dict = q.to_dict()
+        q_dict.pop('correct_answer', None) # Security: hide correct answer from frontend
+        q_dict['question_type'] = 'mcq'
+        
+        raw_options = q.get_options()
+        formatted_options = []
+        for idx, opt in enumerate(raw_options):
+            if isinstance(opt, dict):
+                formatted_options.append(opt)
+            elif isinstance(opt, str):
+                opt_str = opt.strip()
+                if len(opt_str) >= 3 and opt_str[0] in "ABCDEF" and opt_str[1:3] in [". ", ") "]:
+                    lbl = opt_str[0]
+                    txt = opt_str[3:].strip()
+                else:
+                    lbl = labels[idx] if idx < len(labels) else str(idx + 1)
+                    txt = opt_str
+                formatted_options.append({"label": lbl, "text": txt})
+        q_dict['options'] = formatted_options
+        formatted_questions.append(q_dict)
+
+    data["questions"] = formatted_questions
+    data["question_count"] = len(formatted_questions)
 
     return jsonify({
         "success": True,
@@ -296,7 +327,19 @@ def submit_assessment(assignment_id):
     data = request.get_json() or {}
     answers_input = data.get('answers', {})
 
-    questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).all()
+    all_questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).all()
+    # Filter to MCQ questions only
+    mcq_questions = [q for q in all_questions if q.question_type and q.question_type.lower() in ['multiple choice', 'mcq']]
+    valid_q_map = {q.id: q for q in mcq_questions}
+
+    # Requirement 16: Validate submitted question IDs
+    for q_id_str in answers_input.keys():
+        try:
+            q_id_int = int(q_id_str)
+            if q_id_int not in valid_q_map:
+                return jsonify({"success": False, "message": f"Invalid question ID {q_id_str} submitted for this assessment"}), 400
+        except ValueError:
+            return jsonify({"success": False, "message": "Invalid question ID format in submission"}), 400
 
     total_achieved = 0.0
     total_possible = 0.0
@@ -304,36 +347,30 @@ def submit_assessment(assignment_id):
 
     AssessmentAnswer.query.filter_by(assignment_id=assignment_id).delete()
 
-    for q in questions:
-        user_ans = str(answers_input.get(str(q.id)) or answers_input.get(q.id) or "").strip()
+    for q in mcq_questions:
+        user_ans_raw = str(answers_input.get(str(q.id)) or answers_input.get(q.id) or "").strip()
         max_sc = q.max_score
         total_possible += max_sc
 
         achieved = 0.0
-        if q.question_type in ['Multiple Choice', 'Yes/No']:
-            corr = (q.correct_answer or "").strip()
-            if corr and (user_ans.lower() == corr.lower() or user_ans.startswith(corr[:1])):
+        corr = (q.correct_answer or "").strip()
+
+        if user_ans_raw:
+            # Extract label e.g. "A" from "A" or "A. Option Text"
+            user_label = user_ans_raw[0].upper() if len(user_ans_raw) > 0 and user_ans_raw[0] in "ABCDEF" else user_ans_raw.lower()
+            corr_label = corr[0].upper() if len(corr) > 0 and corr[0] in "ABCDEF" else corr.lower()
+
+            if user_ans_raw.lower() == corr.lower() or user_label == corr_label or user_ans_raw.startswith(corr[:1]):
                 achieved = max_sc
             elif not corr:
                 achieved = max_sc
-        elif q.question_type == 'Rating Scale':
-            try:
-                val = float(user_ans)
-                achieved = (val / 5.0) * max_sc
-            except ValueError:
-                achieved = max_sc * 0.8
-        else:
-            if len(user_ans) > 5:
-                achieved = max_sc * 0.9
-            else:
-                achieved = max_sc * 0.5
 
         total_achieved += achieved
 
         ans_record = AssessmentAnswer(
             assignment_id=assignment_id,
             question_id=q.id,
-            answer=user_ans,
+            answer=user_ans_raw,
             score=achieved
         )
         db.session.add(ans_record)
@@ -408,6 +445,154 @@ def submit_assessment(assignment_id):
         }
     }), 200
 
+@assessments_bp.route('/assessment-results', methods=['GET'])
+def get_assessment_results():
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    try:
+        query = AssessmentAssignment.query.filter_by(status='Completed')
+
+        # RBAC Data Isolation
+        if user.role.lower() not in ['hr', 'admin']:
+            if user.role.lower() == 'manager':
+                if not employee:
+                    return jsonify({"success": True, "data": []}), 200
+                team_members = Employee.query.filter(
+                    (Employee.manager_id == employee.id) | (Employee.id == employee.id)
+                ).all()
+                team_ids = [e.id for e in team_members]
+                query = query.filter(AssessmentAssignment.employee_id.in_(team_ids))
+            else: # Employee
+                if not employee:
+                    return jsonify({"success": True, "data": []}), 200
+                query = query.filter_by(employee_id=employee.id)
+
+        # Track joins to prevent duplicate join collisions in SQLAlchemy
+        joined_employee = False
+        joined_assessment = False
+        joined_result = False
+
+        # Optional Query Parameters
+        emp_id_param = request.args.get('employee_id', type=int)
+        if emp_id_param:
+            query = query.filter_by(employee_id=emp_id_param)
+
+        assessment_id_param = request.args.get('assessment_id', type=int)
+        if assessment_id_param:
+            query = query.filter_by(assessment_id=assessment_id_param)
+
+        role_id_param = request.args.get('role_id', type=int)
+        if role_id_param:
+            if not joined_assessment:
+                query = query.join(AssessmentAssignment.assessment)
+                joined_assessment = True
+            query = query.filter(Assessment.role_id == role_id_param)
+
+        dept_param = request.args.get('department', '').strip()
+        if dept_param and dept_param != 'All':
+            if not joined_employee:
+                query = query.join(AssessmentAssignment.employee)
+                joined_employee = True
+            query = query.filter(Employee.department == dept_param)
+
+        search_param = request.args.get('search', '').strip()
+        if search_param:
+            if not joined_employee:
+                query = query.join(AssessmentAssignment.employee)
+                joined_employee = True
+            query = query.filter(
+                (Employee.name.ilike(f"%{search_param}%")) |
+                (Employee.employee_code.ilike(f"%{search_param}%")) |
+                (Employee.designation.ilike(f"%{search_param}%"))
+            )
+
+        readiness_param = request.args.get('readiness_level', '').strip()
+        if readiness_param and readiness_param != 'All':
+            if not joined_result:
+                query = query.join(AssessmentAssignment.result)
+                joined_result = True
+            query = query.filter(AssessmentResult.readiness_level == readiness_param)
+
+        completed_assignments = query.order_by(AssessmentAssignment.id.desc()).all()
+
+        results_list = []
+        for a in completed_assignments:
+            if not a.result:
+                continue
+
+            rdata = a.result.to_dict()
+            rdata["assignment"] = a.to_dict()
+            rdata["employee_id"] = a.employee_id
+            rdata["employee_name"] = a.employee.name if a.employee else ""
+            rdata["employee_code"] = a.employee.employee_code if a.employee else ""
+            rdata["department"] = a.employee.department if a.employee else ""
+            rdata["designation"] = a.employee.designation if a.employee else ""
+            rdata["assessment_id"] = a.assessment_id
+            rdata["assessment_title"] = a.assessment.title if a.assessment else ""
+            rdata["role_id"] = a.assessment.role_id if a.assessment else 1
+            rdata["role_name"] = a.assessment.role.role_name if a.assessment and a.assessment.role else ""
+            rdata["submission_date"] = a.result.completed_at.isoformat() if a.result.completed_at else None
+
+            detail = rdata.get("detail", {})
+            total_score = detail.get("_total_score")
+            total_possible = detail.get("_total_possible")
+
+            if total_score is None or total_possible is None:
+                answers = AssessmentAnswer.query.filter_by(assignment_id=a.id).all()
+                if answers:
+                    total_score = sum(ans.score for ans in answers)
+                    total_possible = sum(ans.question.max_score for ans in answers if ans.question)
+                else:
+                    total_score = rdata.get("overall_score", 80.0)
+                    total_possible = 100.0
+
+            rdata["total_score"] = round(total_score, 2)
+            rdata["total_possible"] = round(total_possible, 2)
+
+            target_role_id = a.assessment.role_id if a.assessment else 1
+            gaps = calculate_competency_gaps(a.employee_id, target_role_id)
+            readiness = calculate_successor_readiness(a.employee_id, target_role_id)
+
+            rdata["gap_analysis"] = gaps
+            rdata["readiness"] = readiness
+
+            # ML Prediction fetch or generate
+            ml_pred = MLPrediction.query.filter_by(employee_id=a.employee_id, role_id=target_role_id).order_by(MLPrediction.id.desc()).first()
+            if ml_pred:
+                rdata["ml_prediction"] = ml_pred.to_dict()
+            else:
+                ml_res = run_ml_readiness_prediction(a.employee_id, target_role_id)
+                rdata["ml_prediction"] = ml_res.get("data") if isinstance(ml_res, dict) and ml_res.get("success") else None
+
+            dev_areas = []
+            strengths = []
+            if gaps and "competencies" in gaps:
+                for c in gaps["competencies"]:
+                    if c.get("gap", 0) > 0:
+                        dev_areas.append({
+                            "competency": c.get("competency_name") or c.get("name"),
+                            "current_score": c.get("current_score"),
+                            "required_score": c.get("required_score"),
+                            "gap": c.get("gap")
+                        })
+                    else:
+                        strengths.append({
+                            "competency": c.get("competency_name") or c.get("name"),
+                            "current_score": c.get("current_score"),
+                            "required_score": c.get("required_score")
+                        })
+            rdata["development_areas"] = dev_areas
+            rdata["strengths"] = strengths
+
+            results_list.append(rdata)
+
+        return jsonify({"success": True, "data": results_list}), 200
+    except Exception as e:
+        print(f"[ERROR] Exception in get_assessment_results: {str(e)}")
+        return jsonify({"success": False, "message": f"Server error processing assessment results: {str(e)}"}), 500
+
 @assessments_bp.route('/assessment-results/<int:assignment_id>', methods=['GET'])
 def get_assessment_result(assignment_id):
     user, employee, err_msg, status = get_current_user()
@@ -432,6 +617,16 @@ def get_assessment_result(assignment_id):
 
     data = assignment.result.to_dict()
     data["assignment"] = assignment.to_dict()
+    data["employee_id"] = assignment.employee_id
+    data["employee_name"] = assignment.employee.name if assignment.employee else ""
+    data["employee_code"] = assignment.employee.employee_code if assignment.employee else ""
+    data["department"] = assignment.employee.department if assignment.employee else ""
+    data["designation"] = assignment.employee.designation if assignment.employee else ""
+    data["assessment_id"] = assignment.assessment_id
+    data["assessment_title"] = assignment.assessment.title if assignment.assessment else ""
+    data["role_id"] = assignment.assessment.role_id if assignment.assessment else 1
+    data["role_name"] = assignment.assessment.role.role_name if assignment.assessment and assignment.assessment.role else ""
+    data["submission_date"] = assignment.result.completed_at.isoformat() if assignment.result.completed_at else None
 
     detail = data.get("detail", {})
     total_score = detail.get("_total_score")
@@ -456,17 +651,43 @@ def get_assessment_result(assignment_id):
     data["gap_analysis"] = gaps
     data["readiness"] = readiness
 
+    # ML Prediction
+    ml_pred = MLPrediction.query.filter_by(employee_id=assignment.employee_id, role_id=target_role_id).order_by(MLPrediction.id.desc()).first()
+    if ml_pred:
+        data["ml_prediction"] = ml_pred.to_dict()
+    else:
+        ml_res = run_ml_readiness_prediction(assignment.employee_id, target_role_id)
+        data["ml_prediction"] = ml_res.get("data") if isinstance(ml_res, dict) and ml_res.get("success") else None
+
     dev_areas = []
+    strengths = []
     if gaps and "competencies" in gaps:
         for c in gaps["competencies"]:
             if c.get("gap", 0) > 0:
                 dev_areas.append({
-                    "competency": c.get("name"),
+                    "competency": c.get("competency_name") or c.get("name"),
                     "current_score": c.get("current_score"),
-                    "target_score": c.get("target_score"),
+                    "required_score": c.get("required_score"),
                     "gap": c.get("gap")
                 })
+            else:
+                strengths.append({
+                    "competency": c.get("competency_name") or c.get("name"),
+                    "current_score": c.get("current_score"),
+                    "required_score": c.get("required_score")
+                })
     data["development_areas"] = dev_areas
+    data["strengths"] = strengths
+
+    # Include user's question answers (without revealing correct_answer if employee role)
+    answers_records = AssessmentAnswer.query.filter_by(assignment_id=assignment_id).all()
+    formatted_answers = []
+    for ans in answers_records:
+        ans_dict = ans.to_dict()
+        if user.role.lower() == 'employee':
+            ans_dict.pop('correct_answer', None)
+        formatted_answers.append(ans_dict)
+    data["answers"] = formatted_answers
 
     return jsonify({
         "success": True,

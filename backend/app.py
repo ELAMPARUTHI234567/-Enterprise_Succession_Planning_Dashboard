@@ -1,15 +1,17 @@
 import os
 import sys
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from config import Config
 from extensions import db, cors
 from utils.seed_data import seed_database_if_empty, sync_employee_users
+from utils.migrations import run_schema_migrations
 
 # Imports blueprints
 from routes import (
     auth_bp, employees_bp, roles_bp, competencies_bp,
     assessments_bp, gap_analysis_bp, successors_bp,
-    dashboard_bp, analytics_bp, ml_bp, reports_bp
+    dashboard_bp, analytics_bp, ml_bp, reports_bp,
+    question_bank_bp
 )
 
 def mask_db_uri(uri):
@@ -58,6 +60,16 @@ def create_app():
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "supports_credentials": True
     }})
+
+    @app.after_request
+    def add_cors_headers(response):
+        origin = request.headers.get('Origin')
+        if origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        return response
 
     # Validate DATABASE_URL configuration
     if Config.HAS_PLACEHOLDER:
@@ -121,6 +133,7 @@ def create_app():
     with app.app_context():
         try:
             db.create_all()
+            run_schema_migrations(db.engine)
             seed_database_if_empty()
             sync_employee_users()
             print(f"[SUCCESS] Database tables verified & seeded cleanly.")
@@ -139,6 +152,7 @@ def create_app():
     app.register_blueprint(analytics_bp, url_prefix='/api')
     app.register_blueprint(ml_bp, url_prefix='/api')
     app.register_blueprint(reports_bp, url_prefix='/api')
+    app.register_blueprint(question_bank_bp, url_prefix='/api')
 
     @app.route('/api/health', methods=['GET'])
     def health_check():
