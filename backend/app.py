@@ -161,6 +161,26 @@ def create_app():
             "message": "Enterprise Succession Planning API is running"
         }), 200
 
+    @app.errorhandler(404)
+    def handle_404(e):
+        resp = jsonify({"success": False, "message": "API endpoint not found"})
+        resp.status_code = 404
+        return add_cors_headers(resp)
+
+    @app.errorhandler(500)
+    def handle_500(e):
+        print(f"[ERROR 500] Internal server error: {str(e)}")
+        resp = jsonify({"success": False, "message": f"Internal server error: {str(e)}"})
+        resp.status_code = 500
+        return add_cors_headers(resp)
+
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        print(f"[ERROR Exception] Unhandled server error: {str(e)}")
+        resp = jsonify({"success": False, "message": f"Server error: {str(e)}"})
+        resp.status_code = 500
+        return add_cors_headers(resp)
+
     return app
 
 app = create_app()

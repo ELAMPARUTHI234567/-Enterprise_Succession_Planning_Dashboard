@@ -82,7 +82,7 @@ export const Assessments = () => {
     setLoading(true);
     setError('');
     try {
-      const [assRes, roleRes, compRes, empRes, qbSumRes, resultsRes] = await Promise.all([
+      const results = await Promise.allSettled([
         assessmentService.getAll(),
         roleService.getAll(),
         competencyService.getAll(),
@@ -91,25 +91,57 @@ export const Assessments = () => {
         assessmentService.getCompletedResults()
       ]);
 
-      if (assRes.success) setAssessments(assRes.data || []);
-      if (roleRes.success) {
-        const fetchedRoles = roleRes.data || [];
+      const [assRes, roleRes, compRes, empRes, qbSumRes, resultsRes] = results;
+      let firstErr = null;
+
+      if (assRes.status === 'fulfilled' && assRes.value?.success) {
+        setAssessments(assRes.value.data || []);
+      } else if (assRes.status === 'rejected' && !firstErr) {
+        firstErr = assRes.reason?.message;
+      }
+
+      if (roleRes.status === 'fulfilled' && roleRes.value?.success) {
+        const fetchedRoles = roleRes.value.data || [];
         setRoles(fetchedRoles);
         if (fetchedRoles.length > 0) {
           setSelectedBankRoleId(fetchedRoles[0].id);
           setCreateRoleId(fetchedRoles[0].id);
         }
+      } else if (roleRes.status === 'rejected' && !firstErr) {
+        firstErr = roleRes.reason?.message;
       }
-      if (compRes.success) setCompetencies(compRes.data || []);
-      if (empRes.success) {
-        const fetchedEmps = empRes.data || [];
+
+      if (compRes.status === 'fulfilled' && compRes.value?.success) {
+        setCompetencies(compRes.value.data || []);
+      } else if (compRes.status === 'rejected' && !firstErr) {
+        firstErr = compRes.reason?.message;
+      }
+
+      if (empRes.status === 'fulfilled' && empRes.value?.success) {
+        const fetchedEmps = empRes.value.data || [];
         setEmployees(fetchedEmps);
         if (fetchedEmps.length > 0) {
           setAssignEmpId(fetchedEmps[0].id);
         }
+      } else if (empRes.status === 'rejected' && !firstErr) {
+        firstErr = empRes.reason?.message;
       }
-      if (qbSumRes.success) setBankSummary(qbSumRes.data || []);
-      if (resultsRes.success) setCompletedResults(resultsRes.data || []);
+
+      if (qbSumRes.status === 'fulfilled' && qbSumRes.value?.success) {
+        setBankSummary(qbSumRes.value.data || []);
+      } else if (qbSumRes.status === 'rejected' && !firstErr) {
+        firstErr = qbSumRes.reason?.message;
+      }
+
+      if (resultsRes.status === 'fulfilled' && resultsRes.value?.success) {
+        setCompletedResults(resultsRes.value.data || []);
+      } else if (resultsRes.status === 'rejected' && !firstErr) {
+        firstErr = resultsRes.reason?.message;
+      }
+
+      if (firstErr && (!resultsRes.value?.success && !assRes.value?.success)) {
+        setError(firstErr);
+      }
     } catch (err) {
       setError(err.message || 'Error loading assessment data');
     } finally {
@@ -136,6 +168,7 @@ export const Assessments = () => {
       }
     } catch (err) {
       console.error("Error loading completed results:", err);
+      setError(err.message || "Failed to fetch completed results");
     } finally {
       setResultsLoading(false);
     }

@@ -56,7 +56,7 @@ api.interceptors.response.use(
     }
 
     if (error.code === 'ERR_NETWORK' || !error.response) {
-      return Promise.reject(new Error(`Network / CORS communication error connecting to backend API at ${API_BASE_URL}. Verify backend service health and CORS settings.`));
+      return Promise.reject(new Error(`Unable to communicate with API server at ${API_BASE_URL}. Please check internet connection or verify backend service health.`));
     }
 
     return Promise.reject(new Error(errMessage));
