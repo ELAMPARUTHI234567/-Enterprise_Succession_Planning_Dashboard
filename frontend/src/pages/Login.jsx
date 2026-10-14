@@ -19,7 +19,7 @@ import {
   X
 } from 'lucide-react';
 import { authService } from '../services/api';
-import { supabase } from '../utils/supabaseClient';
+import { supabase, getOAuthRedirectUrl } from '../utils/supabaseClient';
 
 const GoogleIcon = ({ className = "w-4 h-4" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -63,33 +63,7 @@ export const Login = () => {
   const hasExchangedRef = useRef(false);
 
   useEffect(() => {
-    // Check for existing session in localStorage
-    const existingToken = localStorage.getItem('succession_token');
-    const existingUserJson = localStorage.getItem('succession_user');
-    const hasOAuthParams = window.location.hash.includes('access_token') || 
-                           window.location.search.includes('code=') ||
-                           window.location.search.includes('error=');
-
-    if (existingToken && existingUserJson && !hasOAuthParams) {
-      try {
-        const user = JSON.parse(existingUserJson);
-        const userRole = (user.role || '').toString().toLowerCase();
-        if (userRole === 'hr' || userRole === 'admin') {
-          navigate('/dashboard', { replace: true });
-          return;
-        } else if (userRole === 'manager') {
-          navigate('/manager-dashboard', { replace: true });
-          return;
-        } else {
-          navigate('/employee-dashboard', { replace: true });
-          return;
-        }
-      } catch (e) {
-        // Ignore invalid local JSON
-      }
-    }
-
-    // Inspect URL for OAuth cancellation or errors from Google/Supabase
+    // 1. Inspect URL for OAuth return parameters & errors
     const searchParams = new URLSearchParams(window.location.search);
     const hashString = window.location.hash.startsWith('#') ? window.location.hash.substring(1) : window.location.hash;
     const hashParams = new URLSearchParams(hashString);
@@ -97,14 +71,45 @@ export const Login = () => {
     const oauthError = searchParams.get('error_description') || searchParams.get('error') || 
                        hashParams.get('error_description') || hashParams.get('error');
 
+    const hashAccessToken = hashParams.get('access_token');
+    const hashRefreshToken = hashParams.get('refresh_token');
+    const authCode = searchParams.get('code');
+    const hasOAuthTokens = !!(hashAccessToken || authCode);
+
     if (oauthError) {
       window.history.replaceState({}, document.title, window.location.pathname);
       setError(`Google Sign-In was cancelled or failed: ${decodeURIComponent(oauthError.replace(/\+/g, ' '))}`);
       return;
     }
 
+    // 2. Only redirect from existing localStorage if NOT currently returning from an OAuth flow
+    if (!hasOAuthTokens) {
+      const existingToken = localStorage.getItem('succession_token');
+      const existingUserJson = localStorage.getItem('succession_user');
+      if (existingToken && existingUserJson) {
+        try {
+          const user = JSON.parse(existingUserJson);
+          const userRole = (user.role || '').toString().toLowerCase();
+          if (userRole === 'hr' || userRole === 'admin') {
+            navigate('/dashboard', { replace: true });
+            return;
+          } else if (userRole === 'manager') {
+            navigate('/manager-dashboard', { replace: true });
+            return;
+          } else {
+            navigate('/employee-dashboard', { replace: true });
+            return;
+          }
+        } catch (e) {
+          localStorage.removeItem('succession_token');
+          localStorage.removeItem('succession_user');
+        }
+      }
+    }
+
     if (!supabase) return;
 
+    // 3. Process OAuth session and exchange token with Flask backend
     const processOAuthSession = async (session) => {
       if (!session?.access_token || hasExchangedRef.current) return;
       hasExchangedRef.current = true;
@@ -117,8 +122,9 @@ export const Login = () => {
 
         const metadata = session?.user?.user_metadata || {};
         const res = await authService.loginSupabase(session.access_token, metadata);
-        if (res.success) {
-          // Clear hash & search parameters to avoid re-triggering on browser refresh
+        
+        if (res.success && res.data?.token && res.data?.user) {
+          // Double ensure tokens and params are completely removed from browser address bar
           window.history.replaceState({}, document.title, window.location.pathname);
 
           const userData = res.data.user;
@@ -127,6 +133,7 @@ export const Login = () => {
           localStorage.setItem('succession_token', token);
           localStorage.setItem('succession_user', JSON.stringify(userData));
 
+          // Strictly route using database-authoritative role from backend response
           const userRole = (userData.role || '').toString().toLowerCase();
           if (userRole === 'hr' || userRole === 'admin') {
             navigate('/dashboard', { replace: true });
@@ -135,6 +142,8 @@ export const Login = () => {
           } else {
             navigate('/employee-dashboard', { replace: true });
           }
+        } else {
+          throw new Error(res.message || 'Authentication exchange was not successful.');
         }
       } catch (err) {
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -176,17 +185,51 @@ export const Login = () => {
       }
     };
 
+    // 4. Handle incoming tokens: URL hash tokens (implicit flow) or query code (PKCE flow)
+    if (hashAccessToken) {
+      setGoogleLoading(true);
+      // Immediately scrub the sensitive tokens from the browser address bar
+      window.history.replaceState({}, document.title, window.location.pathname);
+      supabase.auth.setSession({
+        access_token: hashAccessToken,
+        refresh_token: hashRefreshToken || ''
+      }).then(({ data, error: setErr }) => {
+        if (setErr) {
+          setError(setErr.message || 'Failed to initialize session from Google authentication.');
+          setGoogleLoading(false);
+        } else if (data?.session) {
+          processOAuthSession(data.session);
+        }
+      }).catch((e) => {
+        setError(e.message || 'Error establishing Google session.');
+        setGoogleLoading(false);
+      });
+    } else if (authCode) {
+      setGoogleLoading(true);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      supabase.auth.exchangeCodeForSession(authCode).then(({ data, error: codeErr }) => {
+        if (codeErr) {
+          setError(codeErr.message || 'Failed to exchange authorization code.');
+          setGoogleLoading(false);
+        } else if (data?.session) {
+          processOAuthSession(data.session);
+        }
+      }).catch((e) => {
+        setError(e.message || 'Error exchanging authorization code.');
+        setGoogleLoading(false);
+      });
+    } else {
+      // 5. Check if session already stored or detected internally
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session && !hasExchangedRef.current) {
+          processOAuthSession(session);
+        }
+      });
+    }
 
-    // Check if session is already stored or detected in URL
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        processOAuthSession(session);
-      }
-    });
-
-    // Listen for OAuth completion
+    // 6. Listen for OAuth completion event
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) {
+      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session && !hasExchangedRef.current) {
         processOAuthSession(session);
       }
     });
@@ -204,11 +247,13 @@ export const Login = () => {
     }
 
     setGoogleLoading(true);
+    hasExchangedRef.current = false;
     try {
+      const redirectUrl = getOAuthRedirectUrl();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin
+          redirectTo: redirectUrl
         }
       });
 

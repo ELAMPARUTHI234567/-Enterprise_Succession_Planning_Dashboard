@@ -1,2 +1,2 @@
-export { supabase } from './utils/supabaseClient';
-export default { supabase };
+export { supabase, getOAuthRedirectUrl } from './utils/supabaseClient';
+export default { supabase, getOAuthRedirectUrl };
