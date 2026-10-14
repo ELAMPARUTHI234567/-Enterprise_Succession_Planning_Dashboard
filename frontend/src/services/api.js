@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { supabase } from '../utils/supabaseClient';
 
 let rawApiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').trim();
 if (rawApiUrl.includes('enterprise-succession-dashboard.onrender.com')) {
@@ -52,7 +53,9 @@ api.interceptors.response.use(
         }
       }
       const detailStr = responseData || error.response.statusText || errMessage;
-      return Promise.reject(new Error(`[HTTP ${error.response.status}] ${detailStr}`));
+      const customErr = new Error(`[HTTP ${error.response.status}] ${detailStr}`);
+      customErr.response = error.response;
+      return Promise.reject(customErr);
     }
 
     if (error.code === 'ERR_NETWORK' || !error.response) {
@@ -65,14 +68,60 @@ api.interceptors.response.use(
 
 export const authService = {
   login: (credentials) => api.post('/login', credentials),
+  loginSupabase: (accessToken, metadata = {}) => api.post('/supabase', { 
+    access_token: accessToken,
+    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+    user_metadata: metadata
+  }),
+  onboardEmployee: (data) => api.post('/onboard-employee', data),
+  getPendingRegistrations: () => api.get('/user-accounts/pending'),
+  approveUserAccount: (id) => api.post(`/user-accounts/${id}/approve`),
+  rejectUserAccount: (id) => api.post(`/user-accounts/${id}/reject`),
   getMe: () => api.get('/me'),
   getUserAccounts: () => api.get('/user-accounts'),
   createUserAccount: (data) => api.post('/user-accounts', data),
   updateUserAccount: (id, data) => api.put(`/user-accounts/${id}`, data),
+  linkOAuthEmail: (id, oauthEmail) => api.post(`/user-accounts/${id}/link-oauth-email`, { oauth_email: oauthEmail }),
+  unlinkOAuthEmail: (id) => api.post(`/user-accounts/${id}/unlink-oauth-email`),
   toggleUserStatus: (id) => api.post(`/user-accounts/${id}/toggle-status`),
-  logout: () => {
-    localStorage.removeItem('succession_token');
-    localStorage.removeItem('succession_user');
+  switchRole: (role) => api.post('/switch-role', { role }),
+  logout: async () => {
+    // 1. Sign out from Supabase session if active with timeout guard
+    if (supabase?.auth) {
+      try {
+        await Promise.race([
+          supabase.auth.signOut(),
+          new Promise((resolve) => setTimeout(resolve, 2000))
+        ]);
+      } catch (err) {
+        console.warn('[Auth] Supabase signOut caught error:', err);
+      }
+    }
+
+    // 2. Clear application auth token and user profile
+    try {
+      localStorage.removeItem('succession_token');
+      localStorage.removeItem('succession_user');
+
+      // Clear any Supabase cached tokens in localStorage (e.g. sb-*-auth-token)
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('supabase.auth'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch (e) {
+      console.warn('[Auth] Storage clear error:', e);
+    }
+
+    // 3. Clear session storage
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.clear();
+      }
+    } catch (e) {}
   }
 };
 
@@ -82,6 +131,28 @@ export const employeeService = {
   create: (data) => api.post('/employees', data),
   update: (id, data) => api.put(`/employees/${id}`, data),
   delete: (id) => api.delete(`/employees/${id}`),
+
+  // Module 1: Projects
+  getProjects: (empId) => api.get(`/employees/${empId}/projects`),
+  addProject: (empId, data) => api.post(`/employees/${empId}/projects`, data),
+  updateProject: (empId, projId, data) => api.put(`/employees/${empId}/projects/${projId}`, data),
+  deleteProject: (empId, projId) => api.delete(`/employees/${empId}/projects/${projId}`),
+  verifyProject: (empId, projId, data) => api.post(`/employees/${empId}/projects/${projId}/verify`, data),
+
+  // Module 2: Employment History & Company Tenure
+  getEmploymentHistory: (empId) => api.get(`/employees/${empId}/employment-history`),
+  addEmploymentHistory: (empId, data) => api.post(`/employees/${empId}/employment-history`, data),
+  updateEmploymentHistory: (empId, histId, data) => api.put(`/employees/${empId}/employment-history/${histId}`, data),
+  deleteEmploymentHistory: (empId, histId) => api.delete(`/employees/${empId}/employment-history/${histId}`),
+  verifyEmploymentHistory: (empId, histId) => api.post(`/employees/${empId}/employment-history/${histId}/verify`),
+  updateCompanyInfo: (empId, data) => api.put(`/employees/${empId}/company-info`, data),
+
+  // Module 3: Technical Skills
+  getSkills: (empId, roleId = 1) => api.get(`/employees/${empId}/skills`, { params: { role_id: roleId } }),
+  addSkill: (empId, data) => api.post(`/employees/${empId}/skills`, data),
+  updateSkill: (empId, skillId, data) => api.put(`/employees/${empId}/skills/${skillId}`, data),
+  deleteSkill: (empId, skillId) => api.delete(`/employees/${empId}/skills/${skillId}`),
+  verifySkill: (empId, skillId, data) => api.post(`/employees/${empId}/skills/${skillId}/verify`, data),
 };
 
 export const roleService = {
@@ -92,6 +163,19 @@ export const roleService = {
   delete: (id) => api.delete(`/roles/${id}`),
   getCompetencies: (roleId) => api.get(`/roles/${roleId}/competencies`),
   saveCompetencies: (roleId, competencies) => api.post(`/roles/${roleId}/competencies`, { competencies }),
+
+  // Module 3: Role Required Skills
+  getRequiredSkills: (roleId) => api.get(`/roles/${roleId}/required-skills`),
+  addRequiredSkill: (roleId, data) => api.post(`/roles/${roleId}/required-skills`, data),
+  deleteRequiredSkill: (roleId, skillId) => api.delete(`/roles/${roleId}/required-skills/${skillId}`),
+
+  // Module 4: HR Candidate Comparison
+  getCandidatesComparison: (roleId, params) => api.get(`/roles/${roleId}/candidates-comparison`, { params }),
+};
+
+export const suitabilityService = {
+  getConfig: () => api.get('/suitability-config'),
+  updateConfig: (data) => api.put('/suitability-config', data),
 };
 
 export const competencyService = {
@@ -112,6 +196,45 @@ export const assessmentService = {
   submitAssessment: (assignmentId, answers) => api.post(`/assessment-assignments/${assignmentId}/submit`, { answers }),
   getResult: (assignmentId) => api.get(`/assessment-results/${assignmentId}`),
   getCompletedResults: (params) => api.get('/assessment-results', { params }),
+
+  // Module 5: HR Manual Scheduling & Timing Window Enforcement
+  checkConflicts: (schedulesOrPayload) => {
+    if (Array.isArray(schedulesOrPayload)) {
+      return api.post('/assessment-schedules/check-conflicts', { schedules: schedulesOrPayload });
+    }
+    const schedules = schedulesOrPayload?.schedules || schedulesOrPayload?.assignments || [];
+    return api.post('/assessment-schedules/check-conflicts', {
+      schedules,
+      allow_simultaneous: schedulesOrPayload?.allow_simultaneous || false
+    });
+  },
+  checkSchedulingConflicts: (payload) => {
+    if (Array.isArray(payload)) {
+      return api.post('/assessment-schedules/check-conflicts', { schedules: payload });
+    }
+    const schedules = payload?.schedules || payload?.assignments || [];
+    return api.post('/assessment-schedules/check-conflicts', {
+      schedules,
+      allow_simultaneous: payload?.allow_simultaneous || false
+    });
+  },
+  batchSaveSchedules: (param1, param2) => {
+    if (typeof param1 === 'object' && param1 !== null && !Array.isArray(param1)) {
+      return api.post('/assessment-schedules/batch-save', param1);
+    }
+    return api.post('/assessment-schedules/batch-save', { assessment_id: param1, schedules: param2 });
+  },
+  getSchedules: (params) => api.get('/assessment-schedules', { params }),
+  reschedule: (assignmentId, data) => api.put(`/assessment-schedules/${assignmentId}/reschedule`, data),
+  cancelSchedule: (assignmentId, reason) => api.post(`/assessment-schedules/${assignmentId}/cancel`, { reason }),
+  startAttempt: (assignmentId) => api.post(`/assessment-assignments/${assignmentId}/start`),
+  getWindowStatus: (assignmentId) => api.get(`/assessment-assignments/${assignmentId}/window-status`),
+};
+
+export const notificationService = {
+  getAll: () => api.get('/notifications'),
+  markRead: (id) => api.post(`/notifications/${id}/read`),
+  markAllRead: () => api.post('/notifications/read-all'),
 };
 
 export const gapService = {

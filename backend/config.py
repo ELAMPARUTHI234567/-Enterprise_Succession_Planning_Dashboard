@@ -77,3 +77,7 @@ class Config:
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
     AI_MODEL_PATH = os.getenv("AI_MODEL_PATH", os.path.join(BASE_DIR, "../ml/model.joblib"))
 
+    # Supabase Configuration
+    SUPABASE_URL = os.getenv("SUPABASE_URL", os.getenv("VITE_SUPABASE_URL", "https://livemvqdyupoipuajury.supabase.co"))
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", os.getenv("VITE_SUPABASE_ANON_KEY", "sb_publishable_WrkMC4kfEAQC7dAfpmln-Q_CKfrm6_0"))
+

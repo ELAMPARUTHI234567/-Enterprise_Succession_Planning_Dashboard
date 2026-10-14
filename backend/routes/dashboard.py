@@ -10,6 +10,8 @@ from services.readiness_service import calculate_successor_readiness
 from services.gap_service import calculate_competency_gaps
 from extensions import db
 
+from utils.auth_middleware import get_current_user
+
 dashboard_bp = Blueprint('dashboard', __name__)
 
 @dashboard_bp.route('/dashboard-summary', methods=['GET'])
@@ -17,24 +19,48 @@ def get_dashboard_summary():
     manager_id = request.args.get('manager_id', type=int)
     employee_id = request.args.get('employee_id', type=int)
 
-    total_employees = Employee.query.count()
-    total_managers = User.query.filter_by(role='Manager').count()
-    if total_managers == 0:
-        total_managers = Employee.query.filter(Employee.designation.ilike('%manager%')).count() or 4
-        
+    user, current_emp, _, _ = get_current_user()
+    if user:
+        if user.role.lower() == 'manager':
+            manager_id = current_emp.id if current_emp else -1
+            employee_id = None
+        elif user.role.lower() == 'employee':
+            employee_id = current_emp.id if current_emp else -1
+            manager_id = None
+
     total_roles = LeadershipRole.query.count()
     total_competencies = Competency.query.count()
 
-    pending_assessments = AssessmentAssignment.query.filter(AssessmentAssignment.status != 'Completed').count()
-    completed_assessments = AssessmentAssignment.query.filter_by(status='Completed').count()
-
-    # Filter employees list if manager_id provided
+    # Filter employees list if manager_id or employee_id provided
     if manager_id:
         employees = Employee.query.filter_by(manager_id=manager_id).all()
+        total_employees = len(employees)
+        total_managers = 1
     elif employee_id:
         employees = Employee.query.filter_by(id=employee_id).all()
+        total_employees = len(employees)
+        total_managers = 0
     else:
         employees = Employee.query.all()
+        total_employees = len(employees)
+        total_managers = User.query.filter(db.func.lower(User.role) == 'manager').count()
+        if total_managers == 0:
+            total_managers = Employee.query.filter(Employee.designation.ilike('%manager%')).count()
+
+    if manager_id or employee_id:
+        scoped_emp_ids = [e.id for e in employees]
+        if scoped_emp_ids:
+            pending_assessments = AssessmentAssignment.query.filter(AssessmentAssignment.status != 'Completed', AssessmentAssignment.employee_id.in_(scoped_emp_ids)).count()
+            completed_assessments = AssessmentAssignment.query.filter(AssessmentAssignment.status == 'Completed', AssessmentAssignment.employee_id.in_(scoped_emp_ids)).count()
+            in_progress_assessments = AssessmentAssignment.query.filter(AssessmentAssignment.status == 'In Progress', AssessmentAssignment.employee_id.in_(scoped_emp_ids)).count()
+        else:
+            pending_assessments = 0
+            completed_assessments = 0
+            in_progress_assessments = 0
+    else:
+        pending_assessments = AssessmentAssignment.query.filter(AssessmentAssignment.status != 'Completed').count()
+        completed_assessments = AssessmentAssignment.query.filter_by(status='Completed').count()
+        in_progress_assessments = AssessmentAssignment.query.filter_by(status='In Progress').count()
 
     roles = LeadershipRole.query.all()
     competencies = Competency.query.all()
@@ -77,7 +103,7 @@ def get_dashboard_summary():
     top_candidates.sort(key=lambda x: x["readiness_score"], reverse=True)
     top_candidates_slice = top_candidates[:5]
 
-    avg_comp_score = round(sum(ec.score for ec in all_emp_comps) / len(all_emp_comps), 2) if all_emp_comps else 78.5
+    avg_comp_score = round(sum(ec.score for ec in all_emp_comps) / len(all_emp_comps), 2) if all_emp_comps else 0.0
 
     critical_gaps_count = 0
     comp_gap_aggregates = {c.name: {"current_total": 0.0, "required_score": 80.0, "count": 0} for c in competencies}
@@ -105,7 +131,7 @@ def get_dashboard_summary():
 
     for name, agg in comp_gap_aggregates.items():
         comp_labels.append(name)
-        avg_curr = round(agg["current_total"] / agg["count"], 2) if agg["count"] > 0 else 75.0
+        avg_curr = round(agg["current_total"] / agg["count"], 2) if agg["count"] > 0 else 0.0
         req_tgt = agg["required_score"]
         gap_val = max(0.0, req_tgt - avg_curr)
 
@@ -144,7 +170,7 @@ def get_dashboard_summary():
             },
             "assessment_completion": {
                 "labels": ["Completed", "Pending", "In Progress"],
-                "data": [completed_assessments, pending_assessments, 1]
+                "data": [completed_assessments, pending_assessments, in_progress_assessments]
             }
         },
         "top_successors": top_candidates_slice

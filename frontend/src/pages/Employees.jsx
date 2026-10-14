@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Plus, Search, Filter, Eye, Edit2, Trash2, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Users, Plus, Search, Filter, Eye, Edit2, Trash2, Loader2, CheckCircle2, AlertCircle, Clock, Check, X } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
-import { employeeService } from '../services/api';
+import { employeeService, authService } from '../services/api';
 import axios from 'axios';
 
 export const Employees = () => {
@@ -12,6 +12,13 @@ export const Employees = () => {
   const [search, setSearch] = useState('');
   const [department, setDepartment] = useState('All');
   const [error, setError] = useState('');
+
+  // Pending Registrations State
+  const [pendingUsers, setPendingUsers] = useState([]);
+  const [loadingPending, setLoadingPending] = useState(false);
+  const [actionSuccess, setActionSuccess] = useState('');
+  const [approvingId, setApprovingId] = useState(null);
+  const [rejectingId, setRejectingId] = useState(null);
 
   // Modal States
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -55,14 +62,65 @@ export const Employees = () => {
     }
   };
 
+  const fetchPendingRegistrations = async () => {
+    try {
+      setLoadingPending(true);
+      const res = await authService.getPendingRegistrations();
+      if (res && res.success) {
+        setPendingUsers(res.data || []);
+      }
+    } catch (err) {
+      // Non-critical if user lacks permissions or network delay
+      console.warn('Could not load pending registrations:', err);
+    } finally {
+      setLoadingPending(false);
+    }
+  };
+
   useEffect(() => {
     const controller = new AbortController();
     fetchEmployees(controller.signal);
+    fetchPendingRegistrations();
 
     return () => {
       controller.abort();
     };
   }, [search, department]);
+
+  const handleApproveUser = async (userId, userName) => {
+    setApprovingId(userId);
+    setActionSuccess('');
+    setError('');
+    try {
+      const res = await authService.approveUserAccount(userId);
+      if (res.success) {
+        setActionSuccess(`Employee account for "${userName || 'Employee'}" has been approved and activated!`);
+        await fetchPendingRegistrations();
+        await fetchEmployees();
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to approve registration');
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  const handleRejectUser = async (userId, userName) => {
+    setRejectingId(userId);
+    setActionSuccess('');
+    setError('');
+    try {
+      const res = await authService.rejectUserAccount(userId);
+      if (res.success) {
+        setActionSuccess(`Registration for "${userName || 'Employee'}" has been rejected.`);
+        await fetchPendingRegistrations();
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to reject registration');
+    } finally {
+      setRejectingId(null);
+    }
+  };
 
   const handleOpenAddModal = () => {
     const nextCode = `EMP${String(employees.length + 1).padStart(3, '0')}`;
@@ -171,6 +229,114 @@ export const Employees = () => {
         <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium rounded-xl flex items-center space-x-2">
           <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {/* Action Success Toast Banner */}
+      {actionSuccess && (
+        <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold rounded-xl flex items-center justify-between animate-in fade-in">
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>{actionSuccess}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionSuccess('')}
+            className="text-emerald-700 hover:text-emerald-900 text-xs font-bold px-2 py-0.5 rounded hover:bg-emerald-100 transition cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Pending Employee Approvals Panel */}
+      {pendingUsers.length > 0 && (
+        <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold flex-shrink-0">
+                <Clock className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-amber-950 flex items-center space-x-2">
+                  <span>Pending Employee Registrations</span>
+                  <span className="px-2 py-0.5 bg-amber-200/90 text-amber-900 text-[10px] font-extrabold rounded-full">
+                    {pendingUsers.length} awaiting HR approval
+                  </span>
+                </h3>
+                <p className="text-[11px] text-amber-700 mt-0.5">
+                  Employees who authenticated via Google OAuth and submitted self-registration details.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {pendingUsers.map((pUser) => (
+              <div
+                key={pUser.id}
+                className="bg-white rounded-xl p-4 border border-amber-200/80 shadow-xs flex flex-col justify-between space-y-3"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900 truncate">
+                      {pUser.name || pUser.username}
+                    </span>
+                    <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-[9px] font-bold rounded">
+                      Pending Approval
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium truncate">
+                    {pUser.email || pUser.oauth_email}
+                  </p>
+                  <div className="text-[10px] text-slate-400 flex items-center space-x-2 pt-1 font-medium">
+                    <span>{pUser.department || 'General'}</span>
+                    <span>•</span>
+                    <span>{pUser.designation || 'Employee'}</span>
+                    {pUser.employee_code && (
+                      <>
+                        <span>•</span>
+                        <span className="font-mono text-slate-500">{pUser.employee_code}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => handleRejectUser(pUser.id, pUser.name || pUser.username)}
+                    disabled={rejectingId === pUser.id || approvingId === pUser.id}
+                    className="flex-1 py-1.5 px-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 rounded-lg text-[11px] font-bold transition flex items-center justify-center space-x-1 cursor-pointer"
+                  >
+                    {rejectingId === pUser.id ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <>
+                        <X className="w-3 h-3" />
+                        <span>Reject</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleApproveUser(pUser.id, pUser.name || pUser.username)}
+                    disabled={approvingId === pUser.id || rejectingId === pUser.id}
+                    className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shadow-xs shadow-emerald-600/20 transition flex items-center justify-center space-x-1 cursor-pointer"
+                  >
+                    {approvingId === pUser.id ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <>
+                        <Check className="w-3 h-3" />
+                        <span>Approve Account</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

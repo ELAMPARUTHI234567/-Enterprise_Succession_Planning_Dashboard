@@ -3,6 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, User, Award, ShieldAlert, Cpu, CheckCircle, RefreshCw, BarChart2 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import CompetencyRadarChart from '../charts/CompetencyRadarChart';
+import ProjectExperienceSection from '../components/ProjectExperienceSection';
+import EmploymentHistorySection from '../components/EmploymentHistorySection';
+import SkillsCompetenciesSection from '../components/SkillsCompetenciesSection';
 import { employeeService, roleService, mlService } from '../services/api';
 
 export const EmployeeProfile = () => {
@@ -68,9 +71,16 @@ export const EmployeeProfile = () => {
     );
   }
 
+  const userJson = localStorage.getItem('succession_user');
+  const user = userJson ? JSON.parse(userJson) : null;
+  const isHrOrAdmin = user?.role === 'HR' || user?.role === 'Admin';
+  const isManager = user?.role === 'Manager';
+  const canVerify = isHrOrAdmin || isManager;
+
   const gapAnalysis = employee.gap_analysis || {};
   const readiness = employee.readiness || {};
   const competencies = gapAnalysis.competencies || [];
+  const suitability = employee.leadership_suitability || {};
 
   const radarLabels = competencies.map(c => c.competency_name);
   const radarCurrent = competencies.map(c => c.current_score);
@@ -125,42 +135,90 @@ export const EmployeeProfile = () => {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-xl border border-slate-200/80 card-shadow text-center">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Experience</p>
-          <p className="text-xl font-extrabold text-slate-900 mt-1">{employee.experience_years} Yrs</p>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 card-shadow text-center">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Experience</p>
+          <p className="text-lg font-extrabold text-slate-900 mt-1">
+            {employee.experience_summary?.total_experience_years != null 
+              ? `${employee.experience_summary.total_experience_years} Yrs` 
+              : `${employee.experience_years} Yrs`}
+          </p>
         </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200/80 card-shadow text-center">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Performance Rating</p>
-          <p className="text-xl font-extrabold text-emerald-600 mt-1">{employee.performance_score}%</p>
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 card-shadow text-center">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Company Tenure</p>
+          <p className="text-lg font-extrabold text-indigo-700 mt-1">
+            {employee.current_company_tenure_years != null ? `${employee.current_company_tenure_years} Yrs` : 'N/A'}
+          </p>
         </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200/80 card-shadow text-center">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Competency Average</p>
-          <p className="text-xl font-extrabold text-indigo-600 mt-1">{gapAnalysis.overall_competency_score || 0}%</p>
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 card-shadow text-center">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Performance</p>
+          <p className="text-lg font-extrabold text-emerald-600 mt-1">{employee.performance_score}%</p>
         </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200/80 card-shadow text-center">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 card-shadow text-center">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Readiness Score</p>
-          <p className="text-xl font-extrabold text-indigo-700 mt-1">{readiness.readiness_score || 0}%</p>
+          <p className="text-lg font-extrabold text-indigo-700 mt-1">{readiness.readiness_score || 0}%</p>
+        </div>
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 card-shadow text-center">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Suitability Score</p>
+          <p className="text-lg font-extrabold text-indigo-900 mt-1">
+            {suitability.overall_suitability_score != null 
+              ? `${suitability.overall_suitability_score}%` 
+              : 'Eval Pending'}
+          </p>
         </div>
       </div>
 
       {/* Profile Tabs */}
       <div className="bg-white rounded-xl border border-slate-200/80 card-shadow">
-        <div className="flex border-b border-slate-200 px-6 pt-3 space-x-6">
-          {['overview', 'competencies', 'performance', 'succession'].map((tab) => (
+        <div className="flex border-b border-slate-200 px-6 pt-3 space-x-6 overflow-x-auto scrollbar-none">
+          {['overview', 'projects', 'experience', 'skills', 'competencies', 'performance', 'succession'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`pb-3 text-xs font-bold capitalize transition-colors relative ${
+              className={`pb-3 text-xs font-bold capitalize transition-colors relative whitespace-nowrap ${
                 activeTab === tab ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-400 hover:text-slate-600'
               }`}
             >
-              {tab}
+              {tab === 'experience' ? 'Employment History' : (tab === 'projects' ? 'Project Experience' : (tab === 'skills' ? 'Skills & Competencies' : tab))}
             </button>
           ))}
         </div>
 
         <div className="p-6">
+          {/* Projects Tab */}
+          {activeTab === 'projects' && (
+            <ProjectExperienceSection
+              employeeId={employee.id}
+              projects={employee.projects || []}
+              onRefresh={fetchProfileData}
+              canEdit={true}
+              canVerify={canVerify}
+            />
+          )}
+
+          {/* Experience / Employment History Tab */}
+          {activeTab === 'experience' && (
+            <EmploymentHistorySection
+              employeeId={employee.id}
+              employeeProfile={employee}
+              history={employee.employment_history || []}
+              onRefresh={fetchProfileData}
+              canEdit={true}
+              canVerify={canVerify}
+            />
+          )}
+
+          {/* Technical Skills & Competencies Tab */}
+          {activeTab === 'skills' && (
+            <SkillsCompetenciesSection
+              employeeId={employee.id}
+              skills={employee.skills || []}
+              skillGaps={employee.skill_gaps || {}}
+              onRefresh={fetchProfileData}
+              canEdit={true}
+              canVerify={canVerify}
+            />
+          )}
           {/* Overview Tab */}
           {activeTab === 'overview' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -180,6 +238,56 @@ export const EmployeeProfile = () => {
                     <span className="font-bold text-rose-600">{readiness.major_gap}</span>
                   </div>
                 </div>
+
+                {/* Leadership Suitability Scoring Card */}
+                {suitability && suitability.criteria_breakdown && (
+                  <div className="mt-4 p-4 bg-indigo-50/60 rounded-xl border border-indigo-100 space-y-3">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider">
+                          Leadership Role Suitability Score
+                        </h4>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          Evidence coverage: <strong className="text-indigo-700">{suitability.evidence_coverage_pct}%</strong>
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-xl font-extrabold text-indigo-900">
+                          {suitability.overall_suitability_score != null ? `${suitability.overall_suitability_score}%` : 'Pending'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {suitability.insufficient_data_flag && (
+                      <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-[10px] font-bold text-amber-800">
+                        Insufficient data for reliable evaluation ({suitability.evidence_coverage_pct}% coverage)
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5 pt-1 text-[11px]">
+                      <div className="flex justify-between text-slate-700">
+                        <span>Assessments ({suitability.weights_used?.assessment_weight || 30}%):</span>
+                        <span className="font-bold">{suitability.criteria_breakdown?.assessments?.score != null ? `${suitability.criteria_breakdown.assessments.score}%` : 'N/A'}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-700">
+                        <span>Readiness ({suitability.weights_used?.readiness_weight || 25}%):</span>
+                        <span className="font-bold">{suitability.criteria_breakdown?.readiness?.score != null ? `${suitability.criteria_breakdown.readiness.score}%` : 'N/A'}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-700">
+                        <span>Skills ({suitability.weights_used?.skills_weight || 20}%):</span>
+                        <span className="font-bold">{suitability.criteria_breakdown?.skills?.score != null ? `${suitability.criteria_breakdown.skills.score}%` : 'N/A'}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-700">
+                        <span>Projects ({suitability.weights_used?.projects_weight || 15}%):</span>
+                        <span className="font-bold">{suitability.criteria_breakdown?.projects?.score != null ? `${suitability.criteria_breakdown.projects.score}%` : 'N/A'}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-700">
+                        <span>Experience ({suitability.weights_used?.experience_weight || 10}%):</span>
+                        <span className="font-bold">{suitability.criteria_breakdown?.experience?.score != null ? `${suitability.criteria_breakdown.experience.score}%` : 'N/A'}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-5">
                   <h3 className="text-sm font-bold text-slate-800 mb-3">Competency Breakdown</h3>

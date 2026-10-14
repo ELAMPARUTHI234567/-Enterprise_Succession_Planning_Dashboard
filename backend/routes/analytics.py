@@ -5,12 +5,16 @@ from models.competency import Competency
 from models.employee_competency import EmployeeCompetency
 from services.readiness_service import calculate_successor_readiness
 from services.gap_service import calculate_competency_gaps
+from utils.auth_middleware import require_role
 
 analytics_bp = Blueprint('analytics', __name__)
 from models.role_competency import RoleCompetency
 
 @analytics_bp.route('/analytics', methods=['GET'])
 def get_analytics():
+    user, employee, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
     employees = Employee.query.all()
     roles = LeadershipRole.query.all()
     competencies = Competency.query.all()

@@ -11,6 +11,12 @@ from models.question_bank import QuestionBank
 from models.successor_result import SuccessorResult
 from models.ml_prediction import MLPrediction
 from models.ai_recommendation import AIRecommendation
+from models.employee_project import EmployeeProject
+from models.employment_history import EmploymentHistory
+from models.employee_skill import EmployeeSkill
+from models.role_required_skill import RoleRequiredSkill
+from models.suitability_config import SuitabilityConfig
+from models.notification import Notification
 
 __all__ = [
     "User",
@@ -27,5 +33,11 @@ __all__ = [
     "QuestionBank",
     "SuccessorResult",
     "MLPrediction",
-    "AIRecommendation"
+    "AIRecommendation",
+    "EmployeeProject",
+    "EmploymentHistory",
+    "EmployeeSkill",
+    "RoleRequiredSkill",
+    "SuitabilityConfig",
+    "Notification"
 ]

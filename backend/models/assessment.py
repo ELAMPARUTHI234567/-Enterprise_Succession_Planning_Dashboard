@@ -99,9 +99,22 @@ class AssessmentAssignment(db.Model):
     assigned_date = db.Column(db.DateTime, default=datetime.utcnow)
     due_date = db.Column(db.String(50), nullable=True)
     status = db.Column(db.String(20), default='Assigned', nullable=False) 
-    # Statuses: 'Assigned', 'Started', 'In Progress', 'Completed', 'Overdue'
+    # Statuses: 'Assigned', 'Scheduled', 'In-Progress', 'Completed', 'Overdue', 'Missed', 'Cancelled'
     instructions = db.Column(db.Text, nullable=True)
-    
+
+    # HR-Controlled Manual Assessment Scheduling Fields
+    scheduled_date = db.Column(db.String(20), nullable=True)  # YYYY-MM-DD entered explicitly by HR
+    start_time = db.Column(db.String(10), nullable=True)      # HH:MM entered explicitly by HR
+    duration_minutes = db.Column(db.Integer, nullable=True)   # Minutes entered explicitly by HR
+    end_time = db.Column(db.String(10), nullable=True)        # HH:MM calculated from start_time + duration
+    time_zone = db.Column(db.String(50), default='UTC', nullable=True)
+    scheduled_start_datetime = db.Column(db.DateTime, nullable=True) # Authoritative start timestamp in UTC
+    scheduled_end_datetime = db.Column(db.DateTime, nullable=True)   # Authoritative end timestamp in UTC
+    actual_start_time = db.Column(db.DateTime, nullable=True)        # Actual timestamp when employee started
+    submission_deadline = db.Column(db.DateTime, nullable=True)      # Backend-enforced submission deadline
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    schedule_status = db.Column(db.String(30), default='Scheduled', nullable=True)
+
     assigner = db.relationship('User', foreign_keys=[assigned_by])
     employee = db.relationship('Employee', backref='assessment_assignments')
     answers = db.relationship('AssessmentAnswer', backref='assignment', cascade="all, delete-orphan")
@@ -113,7 +126,7 @@ class AssessmentAssignment(db.Model):
             "assessment_id": self.assessment_id,
             "assessment_title": self.assessment.title if self.assessment else "",
             "assessment_description": self.assessment.description if self.assessment else "",
-            "duration": self.assessment.duration if self.assessment else 30,
+            "duration": self.duration_minutes if self.duration_minutes else (self.assessment.duration if self.assessment else 30),
             "passing_threshold": self.assessment.passing_threshold if self.assessment else 70.0,
             "role_id": self.assessment.role_id if self.assessment else None,
             "role_name": self.assessment.role.role_name if self.assessment and self.assessment.role else "",
@@ -127,6 +140,17 @@ class AssessmentAssignment(db.Model):
             "status": self.status,
             "instructions": self.instructions or "Please complete all scenario and competency questions before the due date.",
             "question_count": len(self.assessment.questions) if self.assessment and self.assessment.questions else 0,
+            "scheduled_date": self.scheduled_date,
+            "start_time": self.start_time,
+            "duration_minutes": self.duration_minutes or (self.assessment.duration if self.assessment else 30),
+            "end_time": self.end_time,
+            "time_zone": self.time_zone or "UTC",
+            "scheduled_start_datetime": (self.scheduled_start_datetime.isoformat() + "Z") if self.scheduled_start_datetime else None,
+            "scheduled_end_datetime": (self.scheduled_end_datetime.isoformat() + "Z") if self.scheduled_end_datetime else None,
+            "actual_start_time": (self.actual_start_time.isoformat() + "Z") if self.actual_start_time else None,
+            "submission_deadline": (self.submission_deadline.isoformat() + "Z") if self.submission_deadline else None,
+            "submitted_at": (self.submitted_at.isoformat() + "Z") if self.submitted_at else None,
+            "schedule_status": self.schedule_status or self.status,
             "result": self.result.to_dict() if self.result else None
         }
 

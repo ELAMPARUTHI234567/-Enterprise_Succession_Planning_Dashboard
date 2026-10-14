@@ -7,6 +7,7 @@ from models.competency import Competency
 from models.employee_competency import EmployeeCompetency
 from services.readiness_service import calculate_successor_readiness
 from services.gap_service import calculate_competency_gaps
+from utils.auth_middleware import require_role
 
 reports_bp = Blueprint('reports', __name__)
 
@@ -14,7 +15,18 @@ from models.role_competency import RoleCompetency
 
 @reports_bp.route('/reports/summary', methods=['GET'])
 def get_reports_summary():
-    employees = Employee.query.all()
+    user, employee, err_msg, status = require_role('HR', 'Admin', 'Manager')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    if user.role.lower() == 'manager':
+        if not employee:
+            return jsonify({"success": True, "data": []}), 200
+        employees = Employee.query.filter(
+            (Employee.manager_id == employee.id) | (Employee.id == employee.id)
+        ).all()
+    else:
+        employees = Employee.query.all()
     roles = LeadershipRole.query.all()
     competencies = Competency.query.all()
 
@@ -55,8 +67,20 @@ def get_reports_summary():
 
 @reports_bp.route('/reports/export-csv', methods=['GET'])
 def export_reports_csv():
+    user, employee, err_msg, status = require_role('HR', 'Admin', 'Manager')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     report_type = request.args.get('type', 'readiness')
-    employees = Employee.query.all()
+    if user.role.lower() == 'manager':
+        if not employee:
+            employees = []
+        else:
+            employees = Employee.query.filter(
+                (Employee.manager_id == employee.id) | (Employee.id == employee.id)
+            ).all()
+    else:
+        employees = Employee.query.all()
     roles = LeadershipRole.query.all()
     default_role_id = roles[0].id if roles else 1
 

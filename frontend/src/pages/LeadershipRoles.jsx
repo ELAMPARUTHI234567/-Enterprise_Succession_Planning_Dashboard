@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Award, Plus, Edit2, Trash2, Sliders, CheckCircle2, Loader2 } from 'lucide-react';
+import { Award, Plus, Edit2, Trash2, Sliders, CheckCircle2, Loader2, Code2, X } from 'lucide-react';
 import Modal from '../components/Modal';
 import { roleService, competencyService } from '../services/api';
 
@@ -13,10 +13,19 @@ export const LeadershipRoles = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isReqModalOpen, setIsReqModalOpen] = useState(false);
+  const [isSkillsModalOpen, setIsSkillsModalOpen] = useState(false);
 
   const [selectedRole, setSelectedRole] = useState(null);
   const [formData, setFormData] = useState({ role_name: '', department: 'Information Technology', description: '' });
   const [reqScores, setReqScores] = useState([]);
+  const [roleSkills, setRoleSkills] = useState([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [newSkillRow, setNewSkillRow] = useState({
+    skill_name: '',
+    category: 'Programming Languages',
+    required_proficiency: 3,
+    importance: 'Critical'
+  });
   const [submitting, setSubmitting] = useState(false);
 
   const fetchData = async () => {
@@ -112,6 +121,61 @@ export const LeadershipRoles = () => {
     }
   };
 
+  const handleOpenSkillsModal = async (role) => {
+    setSelectedRole(role);
+    setIsSkillsModalOpen(true);
+    setSkillsLoading(true);
+    try {
+      const res = await roleService.getRequiredSkills(role.id);
+      if (res.success) {
+        setRoleSkills(res.data || []);
+      }
+    } catch (err) {
+      alert(err.message || 'Error fetching required skills');
+    } finally {
+      setSkillsLoading(false);
+    }
+  };
+
+  const handleAddSkillToRole = () => {
+    if (!newSkillRow.skill_name.trim()) return;
+    setRoleSkills(prev => [
+      ...prev,
+      {
+        skill_name: newSkillRow.skill_name.trim(),
+        category: newSkillRow.category,
+        required_proficiency: Number(newSkillRow.required_proficiency),
+        importance: newSkillRow.importance
+      }
+    ]);
+    setNewSkillRow({
+      skill_name: '',
+      category: 'Programming Languages',
+      required_proficiency: 3,
+      importance: 'Critical'
+    });
+  };
+
+  const handleRemoveSkillFromRole = (idx) => {
+    setRoleSkills(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSkillsSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const res = await roleService.saveRequiredSkills(selectedRole.id, roleSkills);
+      if (res.success) {
+        setIsSkillsModalOpen(false);
+        fetchData();
+      }
+    } catch (err) {
+      alert(err.message || 'Error saving required skills');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleDelete = async (id) => {
     if (!window.confirm("Are you sure you want to delete this leadership role?")) return;
     try {
@@ -172,13 +236,24 @@ export const LeadershipRoles = () => {
               </div>
 
               <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
-                <button
-                  onClick={() => handleOpenReqModal(role)}
-                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs flex items-center space-x-1.5 transition-colors"
-                >
-                  <Sliders className="w-3.5 h-3.5" />
-                  <span>Assign Scores</span>
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleOpenReqModal(role)}
+                    className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs flex items-center space-x-1 transition-colors"
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>Scores</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleOpenSkillsModal(role)}
+                    className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-lg text-xs flex items-center space-x-1 transition-colors"
+                  >
+                    <Code2 className="w-3.5 h-3.5" />
+                    <span>Skills</span>
+                  </button>
+                </div>
+
                 <div className="flex space-x-1">
                   <button onClick={() => handleOpenEdit(role)} className="p-1.5 text-slate-500 hover:text-indigo-600">
                     <Edit2 className="w-4 h-4" />
@@ -266,6 +341,113 @@ export const LeadershipRoles = () => {
           <div className="pt-4 flex justify-end space-x-3 border-t border-slate-100">
             <button type="button" onClick={() => setIsReqModalOpen(false)} className="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg text-xs">Cancel</button>
             <button type="submit" disabled={submitting} className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-lg text-xs">Save Standards</button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Assign Role Required Skills Modal */}
+      <Modal 
+        isOpen={isSkillsModalOpen} 
+        onClose={() => setIsSkillsModalOpen(false)} 
+        title={`Configure Required Technical Skills: ${selectedRole?.role_name}`} 
+        maxWidth="max-w-2xl"
+      >
+        <form onSubmit={handleSkillsSubmit} className="space-y-4 text-xs">
+          <p className="text-slate-500">
+            Define mandatory and desirable technical skills and minimum required proficiency levels (1–5) for this leadership position:
+          </p>
+
+          {/* Add Skill Row Form */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <span className="font-extrabold text-slate-800 text-xs">Add Required Skill Standard</span>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+              <input
+                type="text"
+                placeholder="Skill name (e.g. Python)"
+                value={newSkillRow.skill_name}
+                onChange={(e) => setNewSkillRow({ ...newSkillRow, skill_name: e.target.value })}
+                className="px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800"
+              />
+              <select
+                value={newSkillRow.category}
+                onChange={(e) => setNewSkillRow({ ...newSkillRow, category: e.target.value })}
+                className="px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800"
+              >
+                <option value="Programming Languages">Programming Languages</option>
+                <option value="Frameworks & Libraries">Frameworks & Libraries</option>
+                <option value="Databases & Storage">Databases & Storage</option>
+                <option value="Cloud & DevOps">Cloud & DevOps</option>
+                <option value="Domain & Industry">Domain & Industry</option>
+                <option value="Leadership & Management">Leadership & Management</option>
+              </select>
+              <select
+                value={newSkillRow.required_proficiency}
+                onChange={(e) => setNewSkillRow({ ...newSkillRow, required_proficiency: Number(e.target.value) })}
+                className="px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800"
+              >
+                <option value={1}>Level 1 - Beginner</option>
+                <option value={2}>Level 2 - Basic</option>
+                <option value={3}>Level 3 - Intermediate</option>
+                <option value={4}>Level 4 - Advanced</option>
+                <option value={5}>Level 5 - Expert</option>
+              </select>
+              <button
+                type="button"
+                onClick={handleAddSkillToRole}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition-colors"
+              >
+                + Add Standard
+              </button>
+            </div>
+          </div>
+
+          {/* List of Current Required Skills */}
+          {skillsLoading ? (
+            <div className="p-8 text-center text-slate-400">Loading role skills...</div>
+          ) : roleSkills.length === 0 ? (
+            <div className="p-6 text-center text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              No required skills configured yet. Add role skill requirements above.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              {roleSkills.map((rs, idx) => (
+                <div key={idx} className="flex items-center justify-between p-2.5 bg-white border border-slate-200 rounded-xl shadow-xs">
+                  <div>
+                    <span className="font-extrabold text-slate-900">{rs.skill_name}</span>
+                    <span className="text-[10px] text-slate-400 ml-2">({rs.category})</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-extrabold text-[11px] border border-indigo-100">
+                      Required Level: {rs.required_proficiency} / 5
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSkillFromRole(idx)}
+                      className="p-1 text-slate-400 hover:text-rose-600 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="pt-4 flex justify-end space-x-3 border-t border-slate-100">
+            <button 
+              type="button" 
+              onClick={() => setIsSkillsModalOpen(false)} 
+              className="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg text-xs"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              disabled={submitting} 
+              className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-lg text-xs shadow-md shadow-indigo-600/30"
+            >
+              Save Required Skills
+            </button>
           </div>
         </form>
       </Modal>

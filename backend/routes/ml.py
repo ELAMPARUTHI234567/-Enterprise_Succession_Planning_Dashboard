@@ -7,6 +7,7 @@ from services.gap_service import calculate_competency_gaps
 from services.readiness_service import calculate_successor_readiness
 from extensions import db
 from datetime import datetime
+from utils.auth_middleware import get_current_user, require_role
 
 ml_bp = Blueprint('ml', __name__)
 
@@ -18,6 +19,17 @@ def predict_readiness_route():
 
     if not employee_id:
         return jsonify({"success": False, "message": "employee_id is required"}), 400
+
+    user, current_emp, _, _ = get_current_user()
+    if user:
+        role_lower = user.role.lower()
+        if role_lower == 'employee':
+            if not current_emp or current_emp.id != employee_id:
+                return jsonify({"success": False, "message": "Access forbidden: Employees can only predict their own readiness."}), 403
+        elif role_lower == 'manager':
+            target = Employee.query.get(employee_id)
+            if not current_emp or (current_emp.id != employee_id and (not target or target.manager_id != current_emp.id)):
+                return jsonify({"success": False, "message": "Access forbidden: Managers can only view direct reports."}), 403
 
     result = run_ml_readiness_prediction(employee_id, role_id)
     if not result["success"]:
@@ -37,6 +49,17 @@ def generate_ai_recommendation():
 
     if not employee_id:
         return jsonify({"success": False, "message": "employee_id is required"}), 400
+
+    user, current_emp, _, _ = get_current_user()
+    if user:
+        role_lower = user.role.lower()
+        if role_lower == 'employee':
+            if not current_emp or current_emp.id != employee_id:
+                return jsonify({"success": False, "message": "Access forbidden: Employees can only view their own recommendations."}), 403
+        elif role_lower == 'manager':
+            target = Employee.query.get(employee_id)
+            if not current_emp or (current_emp.id != employee_id and (not target or target.manager_id != current_emp.id)):
+                return jsonify({"success": False, "message": "Access forbidden: Managers can only view direct reports."}), 403
 
     employee = Employee.query.get(employee_id)
     role = LeadershipRole.query.get(role_id)
@@ -108,6 +131,10 @@ def role_replacement_recommendation():
     Simulates employee unavailablity scenario, identifies vacant role,
     evaluates all available employees, and returns AI-assisted candidate replacement recommendations.
     """
+    user, employee, err_msg, status = require_role('HR', 'Admin', 'Manager')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
     data = request.get_json() or {}
     unavail_emp_id = data.get('employee_id')
     vacant_role_id = data.get('role_id')

@@ -9,7 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import CompetencyBarChart from '../charts/CompetencyBarChart';
 import ReadinessPieChart from '../charts/ReadinessPieChart';
 import AssessmentResultView from '../components/AssessmentResultView';
-import { dashboardService, employeeService, assessmentService } from '../services/api';
+import { authService, dashboardService, employeeService, assessmentService } from '../services/api';
 
 export const ManagerDashboard = () => {
   const [loading, setLoading] = useState(true);
@@ -23,27 +23,47 @@ export const ManagerDashboard = () => {
   const [error, setError] = useState('');
   const navigate = useNavigate();
 
-  const userJson = localStorage.getItem('succession_user');
-  const user = userJson ? JSON.parse(userJson) : { id: 2, name: 'Sneha Reddy', role: 'Manager' };
+  const [user, setUser] = useState(() => {
+    try {
+      const userJson = localStorage.getItem('succession_user');
+      return userJson ? JSON.parse(userJson) : null;
+    } catch {
+      return null;
+    }
+  });
 
   const fetchManagerData = async () => {
     setLoading(true);
     setError('');
     try {
-      // Get manager's team members
+      let currentManager = user;
+      try {
+        const meRes = await authService.getMe();
+        if (meRes?.success && meRes?.data) {
+          currentManager = meRes.data;  // Use backend data as authoritative source
+          setUser(currentManager);
+          localStorage.setItem('succession_user', JSON.stringify(currentManager));
+        }
+      } catch {
+        // Fall back to existing cached session
+      }
+
+      const queryParams = currentManager?.employee_id ? { manager_id: currentManager.employee_id } : {};
+
+      // Get manager's team members, summary metrics, and completed results
       const [teamRes, sumRes, resultsRes] = await Promise.all([
-        employeeService.getAll({ manager_id: user.employee_id || 4 }),
-        dashboardService.getSummary({ manager_id: user.employee_id || 4 }),
-        assessmentService.getCompletedResults() // Backend enforces RBAC: returns team members' results only!
+        employeeService.getAll(queryParams),
+        dashboardService.getSummary(queryParams),
+        assessmentService.getCompletedResults() // Backend enforces RBAC: returns team members' results only
       ]);
 
-      if (teamRes.success) {
+      if (teamRes?.success) {
         setTeamMembers(teamRes.data || []);
       }
-      if (sumRes.success) {
+      if (sumRes?.success) {
         setSummary(sumRes.data);
       }
-      if (resultsRes.success) {
+      if (resultsRes?.success) {
         setTeamResults(resultsRes.data || []);
       }
     } catch (err) {
@@ -91,13 +111,13 @@ export const ManagerDashboard = () => {
     );
   }
 
-  if (error || (!summary && teamMembers.length === 0)) {
+  if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-96 p-6 bg-white rounded-2xl border border-slate-200 card-shadow text-center">
         <ShieldAlert className="w-12 h-12 text-rose-500 mb-3" />
         <h3 className="text-base font-bold text-slate-800">Unable to Load Manager Team Dashboard</h3>
         <p className="text-xs text-slate-500 mt-1 mb-4 max-w-md">
-          {error || 'Unable to connect to the server. Please check the backend connection.'}
+          {error}
         </p>
         <button
           onClick={fetchManagerData}
@@ -120,10 +140,15 @@ export const ManagerDashboard = () => {
         <div>
           <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 text-[11px] font-semibold mb-2">
             <Users className="w-3.5 h-3.5" />
-            <span>Team Manager Access • {user.name || 'Manager'}</span>
+            <span>Team Manager Access • {user?.name && !['sarah jenkins', 'sneha reddy'].includes(user.name.toLowerCase()) ? user.name : (user?.authenticated_email || user?.oauth_email || user?.email || 'Manager')}</span>
           </div>
           <h2 className="text-2xl font-extrabold tracking-tight">Team Competency &amp; Assessment Dashboard</h2>
-          <p className="text-xs text-indigo-200 mt-1 max-w-2xl">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-indigo-200">
+            <span>Email: <strong className="text-white font-semibold">{user?.authenticated_email || user?.oauth_email || user?.email || 'N/A'}</strong></span>
+            {user?.department && <span>• Department: <strong className="text-white font-semibold">{user.department}</strong></span>}
+            {user?.designation && <span>• Designation: <strong className="text-white font-semibold">{user.designation}</strong></span>}
+          </div>
+          <p className="text-xs text-indigo-200/80 mt-1.5 max-w-2xl">
             Monitor direct reports, review authorized completed assessment results, analyze competency gaps, and view AI readiness predictions.
           </p>
         </div>
@@ -139,38 +164,32 @@ export const ManagerDashboard = () => {
         </div>
       </div>
 
-      {error && (
-        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium rounded-xl">
-          {error}
-        </div>
-      )}
-
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         <StatCard
           title="My Team Members"
-          value={teamMembers.length || 4}
+          value={teamMembers.length}
           subtitle="Direct reports assigned to team"
           icon={Users}
           color="indigo"
         />
         <StatCard
           title="Pending Team Assessments"
-          value={kpis.pending_assessments || 1}
+          value={kpis.pending_assessments ?? 0}
           subtitle="Awaiting employee completion"
           icon={Clock}
           color="amber"
         />
         <StatCard
           title="Completed Team Results"
-          value={teamResults.length || kpis.completed_assessments || 2}
+          value={teamResults.length || kpis.completed_assessments || 0}
           subtitle="Processed results on file"
           icon={CheckCircle2}
           color="emerald"
         />
         <StatCard
           title="High Readiness Team Members"
-          value={kpis.high_readiness || 1}
+          value={kpis.high_readiness ?? 0}
           subtitle="Ready for leadership roles"
           icon={TrendingUp}
           color="blue"
@@ -219,7 +238,7 @@ export const ManagerDashboard = () => {
         {filteredTeamResults.length === 0 ? (
           <div className="py-10 text-center text-slate-400">
             <CheckCircle2 className="w-8 h-8 mx-auto mb-2 opacity-40 text-indigo-500" />
-            <p className="text-xs font-semibold text-slate-700">No team assessment results match your criteria.</p>
+            <p className="text-xs font-semibold text-slate-700">No team assessment results found.</p>
             <p className="text-[11px] font-normal text-slate-500 mt-1">Assignments completed by your direct reports will automatically appear here.</p>
           </div>
         ) : (
@@ -294,11 +313,19 @@ export const ManagerDashboard = () => {
               <p className="text-[11px] text-slate-500">Average team competency scores vs target leadership requirements</p>
             </div>
           </div>
-          <CompetencyBarChart
-            labels={charts.current_vs_required?.labels}
-            currentScores={charts.current_vs_required?.current}
-            requiredScores={charts.current_vs_required?.required}
-          />
+          {charts.current_vs_required?.labels && charts.current_vs_required.labels.length > 0 ? (
+            <CompetencyBarChart
+              labels={charts.current_vs_required.labels}
+              currentScores={charts.current_vs_required.current}
+              requiredScores={charts.current_vs_required.required}
+            />
+          ) : (
+            <div className="h-64 flex flex-col items-center justify-center text-center p-6 text-slate-400">
+              <BarChart2 className="w-10 h-10 mb-2 opacity-30 text-indigo-500" />
+              <p className="text-xs font-semibold text-slate-600">No competency scores available yet</p>
+              <p className="text-[11px] text-slate-400 mt-1">Competency evaluations will be plotted as team assessments are completed.</p>
+            </div>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl p-5 border border-slate-200/80 card-shadow flex flex-col justify-between">
@@ -306,11 +333,19 @@ export const ManagerDashboard = () => {
             <h3 className="text-sm font-bold text-slate-800">Team Readiness Levels</h3>
             <p className="text-[11px] text-slate-500">Readiness classification for team candidates</p>
           </div>
-          <ReadinessPieChart
-            highCount={kpis.high_readiness || 1}
-            mediumCount={kpis.medium_readiness || 2}
-            lowCount={kpis.low_readiness || 1}
-          />
+          {(kpis.high_readiness || kpis.medium_readiness || kpis.low_readiness) ? (
+            <ReadinessPieChart
+              highCount={kpis.high_readiness || 0}
+              mediumCount={kpis.medium_readiness || 0}
+              lowCount={kpis.low_readiness || 0}
+            />
+          ) : (
+            <div className="h-64 flex flex-col items-center justify-center text-center p-6 text-slate-400">
+              <TrendingUp className="w-10 h-10 mb-2 opacity-30 text-indigo-500" />
+              <p className="text-xs font-semibold text-slate-600">No readiness levels recorded</p>
+              <p className="text-[11px] text-slate-400 mt-1">Readiness distribution will render as employees are evaluated.</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -326,56 +361,70 @@ export const ManagerDashboard = () => {
           </span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200/60">
-              <tr>
-                <th className="px-6 py-3">Employee</th>
-                <th className="px-6 py-3">Department</th>
-                <th className="px-6 py-3">Designation</th>
-                <th className="px-6 py-3">Experience</th>
-                <th className="px-6 py-3">Performance</th>
-                <th className="px-6 py-3">Readiness Score</th>
-                <th className="px-6 py-3">Readiness Level</th>
-                <th className="px-6 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-              {teamMembers.map((emp) => (
-                <tr key={emp.id} className="hover:bg-slate-50/80 transition-colors">
-                  <td className="px-6 py-4">
-                    <div>
-                      <p className="font-bold text-slate-900 text-xs">{emp.name}</p>
-                      <p className="text-[10px] text-slate-500">{emp.email} • {emp.employee_code}</p>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">{emp.department}</td>
-                  <td className="px-6 py-4">{emp.designation}</td>
-                  <td className="px-6 py-4">{emp.experience_years} yrs</td>
-                  <td className="px-6 py-4 font-bold text-slate-800">{emp.performance_score}/100</td>
-                  <td className="px-6 py-4 font-extrabold text-indigo-700">{emp.readiness_score || 82}%</td>
-                  <td className="px-6 py-4">
-                    <StatusBadge status={emp.readiness_level || 'High'} type="readiness" />
-                  </td>
-                  <td className="px-6 py-4 text-right space-x-2">
-                    <button
-                      onClick={() => navigate(`/employees/${emp.id}`)}
-                      className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded text-xs transition-colors"
-                    >
-                      Competency Gaps
-                    </button>
-                    <button
-                      onClick={() => navigate(`/assessments`)}
-                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded text-xs transition-colors"
-                    >
-                      Assign Test
-                    </button>
-                  </td>
+        {teamMembers.length === 0 ? (
+          <div className="py-12 text-center text-slate-400">
+            <Users className="w-10 h-10 mx-auto mb-2 opacity-40 text-indigo-500" />
+            <p className="text-xs font-semibold text-slate-700">No direct reports currently assigned</p>
+            <p className="text-[11px] font-normal text-slate-500 mt-1">Direct reports assigned to you in the HR directory will automatically appear here.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200/60">
+                <tr>
+                  <th className="px-6 py-3">Employee</th>
+                  <th className="px-6 py-3">Department</th>
+                  <th className="px-6 py-3">Designation</th>
+                  <th className="px-6 py-3">Experience</th>
+                  <th className="px-6 py-3">Performance</th>
+                  <th className="px-6 py-3">Readiness Score</th>
+                  <th className="px-6 py-3">Readiness Level</th>
+                  <th className="px-6 py-3 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                {teamMembers.map((emp) => (
+                  <tr key={emp.id} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="px-6 py-4">
+                      <div>
+                        <p className="font-bold text-slate-900 text-xs">{emp.name}</p>
+                        <p className="text-[10px] text-slate-500">{emp.email} • {emp.employee_code}</p>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">{emp.department}</td>
+                    <td className="px-6 py-4">{emp.designation}</td>
+                    <td className="px-6 py-4">
+                      {emp.experience_years != null ? `${emp.experience_years} yrs` : 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 font-bold text-slate-800">
+                      {emp.performance_score != null ? `${emp.performance_score}/100` : 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 font-extrabold text-indigo-700">
+                      {emp.readiness_score != null ? `${emp.readiness_score}%` : 'Pending'}
+                    </td>
+                    <td className="px-6 py-4">
+                      <StatusBadge status={emp.readiness_level || 'Low'} type="readiness" />
+                    </td>
+                    <td className="px-6 py-4 text-right space-x-2">
+                      <button
+                        onClick={() => navigate(`/employees/${emp.id}`)}
+                        className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded text-xs transition-colors"
+                      >
+                        Competency Gaps
+                      </button>
+                      <button
+                        onClick={() => navigate(`/assessments`)}
+                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded text-xs transition-colors"
+                      >
+                        Assign Test
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

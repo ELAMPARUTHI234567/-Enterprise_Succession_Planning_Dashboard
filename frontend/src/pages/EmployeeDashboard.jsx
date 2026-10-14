@@ -6,6 +6,9 @@ import {
   Star, ChevronRight, Target, BookOpen, Activity, Mountain, Layers, FileText, ExternalLink
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
+import ProjectExperienceSection from '../components/ProjectExperienceSection';
+import EmploymentHistorySection from '../components/EmploymentHistorySection';
+import SkillsCompetenciesSection from '../components/SkillsCompetenciesSection';
 import { authService, assessmentService, employeeService, gapService } from '../services/api';
 
 export const EmployeeDashboard = () => {
@@ -20,12 +23,15 @@ export const EmployeeDashboard = () => {
   const location = useLocation();
 
   const userJson = localStorage.getItem('succession_user');
-  const user = userJson ? JSON.parse(userJson) : { id: 3, name: 'Arun Kumar', role: 'Employee', employee_id: 1 };
+  const user = userJson ? JSON.parse(userJson) : null;
 
   // Determine active view tab based on route
   const getActiveTab = () => {
     const path = location.pathname;
     if (path === '/my-profile') return 'profile';
+    if (path === '/my-projects') return 'projects';
+    if (path === '/my-experience') return 'experience';
+    if (path === '/my-skills') return 'skills';
     if (path === '/my-competencies') return 'competencies';
     if (path === '/my-assessments') return 'assessments';
     if (path === '/assessment-history') return 'history';
@@ -45,26 +51,41 @@ export const EmployeeDashboard = () => {
     try {
       // 1. Get authenticated user profile & linked employee info
       const meRes = await authService.getMe();
-      if (meRes.success) {
-        const empData = meRes.data.employee_profile || meRes.data;
-        setEmployeeProfile(empData);
+      let empData = null;
+      if (meRes?.success && meRes?.data) {
+        empData = meRes.data.employee_profile || meRes.data;
       }
+
+      const targetRoleId = empData?.target_role_id || 1;
+
+      // 1b. Fetch full employee profile if linked ID exists
+      if (empData?.id) {
+        try {
+          const fullRes = await employeeService.getById(empData.id, targetRoleId);
+          if (fullRes?.success && fullRes.data) {
+            empData = fullRes.data;
+          }
+        } catch (e) {
+          console.warn('Could not load extended profile:', e);
+        }
+      }
+      setEmployeeProfile(empData);
 
       // 2. Get assigned assessments for authenticated employee
       const assRes = await assessmentService.getMyAssessments();
-      if (assRes.success) {
+      if (assRes?.success) {
         setMyAssessments(assRes.data || []);
       }
 
       // 3. Get competency gap analysis for authenticated employee
-      const gapRes = await gapService.getMyGaps(1);
-      if (gapRes.success) {
+      const gapRes = await gapService.getMyGaps(targetRoleId);
+      if (gapRes?.success) {
         setGapData(gapRes.data);
       }
 
       // 4. Get readiness details for authenticated employee
-      const readRes = await gapService.getMyReadiness(1);
-      if (readRes.success) {
+      const readRes = await gapService.getMyReadiness(targetRoleId);
+      if (readRes?.success) {
         setReadinessData(readRes.data);
       }
     } catch (err) {
@@ -87,42 +108,30 @@ export const EmployeeDashboard = () => {
     );
   }
 
-  // Fallback demo data if list is empty
-  const defaultAssessments = [
-    {
-      id: 1,
-      assessment_title: 'Leadership Competency Assessment',
-      description: 'Evaluate your leadership skills and potential',
-      status: 'In Progress',
-      due_date: 'Dec 15, 2024',
-      assigned_by_name: 'Sarah Jenkins',
-      role_name: 'Senior Developer'
-    },
-    {
-      id: 2,
-      assessment_title: 'Technical Competency Assessment',
-      description: 'Assess your technical knowledge and skills',
-      status: 'Assigned',
-      due_date: 'Dec 30, 2024',
-      assigned_by_name: 'Sneha Reddy',
-      role_name: 'Full Stack Engineer'
-    },
-    {
-      id: 3,
-      assessment_title: 'Communication Skills Assessment',
-      description: 'Evaluate your communication and collaboration',
-      status: 'Completed',
-      completed_date: 'Nov 10, 2024',
-      assigned_by_name: 'Sarah Jenkins',
-      role_name: 'Senior Developer',
-      result: { overall_score: 85 }
-    }
-  ];
-
-  const displayAssessments = myAssessments.length > 0 ? myAssessments : defaultAssessments;
+  const displayAssessments = myAssessments || [];
   const pendingAssessments = displayAssessments.filter(a => a.status !== 'Completed');
   const completedAssessments = displayAssessments.filter(a => a.status === 'Completed');
-  const gapCount = gapData?.competencies?.filter(c => c.status !== 'Strength').length || 2;
+  
+  // Real gap calculations
+  const rawGaps = gapData?.competencies?.filter(c => (c.gap || 0) > 0) || [];
+  const gapCount = rawGaps.length;
+
+  // Display name: prefer verified stored name, fall back to email, then username
+  const rawName = employeeProfile?.name || user?.name || null;
+  const displayEmail = employeeProfile?.email || user?.email || 'Not provided';
+  const displayName = (rawName && rawName.trim()) ? rawName.trim() : (displayEmail !== 'Not provided' ? displayEmail : (user?.username || 'User'));
+  
+  // Generate initials: from name words if available, otherwise from email local part
+  const getInitialsFromValue = (val) => {
+    if (!val) return 'U';
+    if (val.includes('@')) return val.split('@')[0].slice(0, 2).toUpperCase();
+    return val.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+  };
+  const initials = getInitialsFromValue(displayName);
+
+  const displayDepartment = employeeProfile?.department || 'Not provided';
+  const displayDesignation = employeeProfile?.designation || 'Not provided';
+  const displayManager = employeeProfile?.manager_name || 'Not provided';
 
   return (
     <div className="space-y-6 font-sans">
@@ -144,14 +153,14 @@ export const EmployeeDashboard = () => {
             {activeTab === 'readiness' && 'Leadership Readiness Score'}
             {activeTab === 'development' && 'Individual Development Plan'}
             {activeTab === 'resources' && 'Learning & Growth Resources'}
-            {activeTab === 'dashboard' && `Welcome, ${employeeProfile?.name || user.name}!`}
+            {activeTab === 'dashboard' && `Welcome, ${displayName}!`}
           </h1>
           <p className="text-xs sm:text-sm text-indigo-200/90 leading-relaxed font-normal">
             Track your assigned competency assessments, view individual performance scores, review gap analysis, and focus on recommended leadership development areas.
           </p>
         </div>
 
-        {/* Quote Card */}
+        {/* Motivation Card */}
         <div className="mt-6 md:mt-0 relative z-10 bg-white/10 backdrop-blur-md border border-white/20 p-4 rounded-2xl max-w-xs text-right hidden lg:block">
           <div className="flex items-center justify-end space-x-2 text-indigo-300 mb-1">
             <Mountain className="w-5 h-5" />
@@ -175,6 +184,9 @@ export const EmployeeDashboard = () => {
         {[
           { label: 'Overview', tab: 'dashboard', path: '/employee-dashboard' },
           { label: 'Profile', tab: 'profile', path: '/my-profile' },
+          { label: 'Projects', tab: 'projects', path: '/my-projects' },
+          { label: 'Experience', tab: 'experience', path: '/my-experience' },
+          { label: 'Skills', tab: 'skills', path: '/my-skills' },
           { label: 'Competencies', tab: 'competencies', path: '/my-competencies' },
           { label: 'Assessments', tab: 'assessments', path: '/my-assessments' },
           { label: 'History', tab: 'history', path: '/assessment-history' },
@@ -263,16 +275,16 @@ export const EmployeeDashboard = () => {
               <div>
                 <div className="flex items-center space-x-4 mb-5">
                   <div className="w-14 h-14 rounded-full bg-indigo-600 text-white flex items-center justify-center font-extrabold text-lg shadow-md shadow-indigo-600/30">
-                    {employeeProfile?.name ? employeeProfile.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase() : 'AK'}
+                    {initials}
                   </div>
                   <div>
                     <div className="flex items-center space-x-2">
-                      <h3 className="text-base font-extrabold text-slate-900">{employeeProfile?.name || 'Arun Kumar'}</h3>
+                      <h3 className="text-base font-extrabold text-slate-900">{displayName}</h3>
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200">
                         • Active
                       </span>
                     </div>
-                    <p className="text-xs font-semibold text-slate-500 mt-0.5">{employeeProfile?.designation || 'Senior Developer'}</p>
+                    <p className="text-xs font-semibold text-slate-500 mt-0.5">{displayDesignation}</p>
                   </div>
                 </div>
 
@@ -282,7 +294,7 @@ export const EmployeeDashboard = () => {
                       <Mail className="w-3.5 h-3.5 text-slate-400" />
                       <span>Email</span>
                     </span>
-                    <span className="font-semibold text-slate-800">{employeeProfile?.email || 'arun.kumar@company.com'}</span>
+                    <span className="font-semibold text-slate-800">{displayEmail}</span>
                   </div>
 
                   <div className="flex items-center justify-between py-1">
@@ -290,7 +302,7 @@ export const EmployeeDashboard = () => {
                       <Building2 className="w-3.5 h-3.5 text-slate-400" />
                       <span>Department</span>
                     </span>
-                    <span className="font-semibold text-slate-800">{employeeProfile?.department || 'Information Technology'}</span>
+                    <span className="font-semibold text-slate-800">{displayDepartment}</span>
                   </div>
 
                   <div className="flex items-center justify-between py-1">
@@ -298,7 +310,7 @@ export const EmployeeDashboard = () => {
                       <User className="w-3.5 h-3.5 text-slate-400" />
                       <span>Manager</span>
                     </span>
-                    <span className="font-semibold text-slate-800">{employeeProfile?.manager_name || 'Sneha Reddy'}</span>
+                    <span className="font-semibold text-slate-800">{displayManager}</span>
                   </div>
 
                   <div className="flex items-center justify-between py-1">
@@ -306,7 +318,9 @@ export const EmployeeDashboard = () => {
                       <Calendar className="w-3.5 h-3.5 text-slate-400" />
                       <span>Experience</span>
                     </span>
-                    <span className="font-semibold text-slate-800">{employeeProfile?.experience_years || 4} years</span>
+                    <span className="font-semibold text-slate-800">
+                      {employeeProfile?.experience_years != null ? `${employeeProfile.experience_years} years` : 'Not recorded'}
+                    </span>
                   </div>
 
                   <div className="flex items-center justify-between py-1">
@@ -314,7 +328,9 @@ export const EmployeeDashboard = () => {
                       <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
                       <span>Performance Score</span>
                     </span>
-                    <span className="font-semibold text-slate-800">{employeeProfile?.performance_score || 78} / 100</span>
+                    <span className="font-semibold text-slate-800">
+                      {employeeProfile?.performance_score != null ? `${employeeProfile.performance_score} / 100` : 'Pending evaluation'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -326,17 +342,25 @@ export const EmployeeDashboard = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-wider">Leadership Readiness Score</p>
-                    <p className="text-2xl font-extrabold text-indigo-950 mt-0.5">{readinessData?.readiness_score || 82}%</p>
+                    <p className="text-2xl font-extrabold text-indigo-950 mt-0.5">
+                      {readinessData?.readiness_score != null ? `${readinessData.readiness_score}%` : 'Pending'}
+                    </p>
                   </div>
-                  <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    • High Readiness
+                  <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${
+                    readinessData?.readiness_level === 'High' 
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      : readinessData?.readiness_level === 'Medium'
+                      ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                      : 'bg-slate-100 text-slate-700 border border-slate-200'
+                  }`}>
+                    • {readinessData?.readiness_level ? `${readinessData.readiness_level} Readiness` : 'Evaluation Pending'}
                   </span>
                 </div>
 
                 <div className="w-full h-2 bg-indigo-100 rounded-full overflow-hidden mt-1">
                   <div
                     className="h-full bg-indigo-600 rounded-full transition-all"
-                    style={{ width: `${readinessData?.readiness_score || 82}%` }}
+                    style={{ width: `${readinessData?.readiness_score || 0}%` }}
                   />
                 </div>
               </div>
@@ -359,71 +383,101 @@ export const EmployeeDashboard = () => {
                   </button>
                 </div>
 
-                <div className="space-y-3.5">
-                  {(activeTab === 'history' ? completedAssessments : displayAssessments).map((ass) => (
-                    <div
-                      key={ass.id}
-                      className="p-4 bg-slate-50/70 hover:bg-slate-100/60 rounded-2xl border border-slate-200/70 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all"
-                    >
-                      <div className="flex items-start space-x-3.5">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold mt-0.5 ${
-                          ass.status === 'Completed'
-                            ? 'bg-emerald-100 text-emerald-600'
-                            : ass.status === 'In Progress'
-                            ? 'bg-amber-100 text-amber-600'
-                            : 'bg-indigo-100 text-indigo-600'
-                        }`}>
-                          <CheckSquare className="w-5 h-5 stroke-[2]" />
-                        </div>
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="font-extrabold text-slate-900 text-sm">{ass.assessment_title}</span>
-                            {ass.status === 'In Progress' && (
-                              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
-                                In Progress
-                              </span>
-                            )}
-                            {ass.status === 'Assigned' && (
-                              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
-                                Assigned
-                              </span>
-                            )}
-                            {ass.status === 'Completed' && (
-                              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
-                                Completed
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-500 mt-1">{ass.description || `Assigned evaluation for ${ass.role_name}`}</p>
-                          <div className="flex items-center space-x-3 text-[11px] text-slate-400 mt-2 font-medium">
-                            <span className="flex items-center space-x-1">
-                              <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                              <span>{ass.status === 'Completed' ? `Completed On ${ass.completed_date || 'Nov 10, 2024'}` : `Due Date ${ass.due_date || 'Dec 15, 2024'}`}</span>
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        {ass.status === 'Completed' ? (
-                          <button
-                            onClick={() => navigate(`/take-assessment/${ass.id}`)}
-                            className="px-4 py-2 border border-indigo-600 text-indigo-600 hover:bg-indigo-50 font-bold rounded-xl text-xs transition-colors"
-                          >
-                            View Results
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => navigate(`/take-assessment/${ass.id}`)}
-                            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-600/30 transition-all"
-                          >
-                            Start Assessment
-                          </button>
-                        )}
-                      </div>
+                {/* Assessments Listing or Empty State */}
+                {((activeTab === 'history' ? completedAssessments : displayAssessments).length === 0) ? (
+                  <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center justify-center space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-500 flex items-center justify-center">
+                      <CheckSquare className="w-6 h-6 stroke-[2]" />
                     </div>
-                  ))}
-                </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-800">No Assessments Assigned Yet</h4>
+                      <p className="text-xs text-slate-500 max-w-sm mt-1">
+                        You currently have no pending competency assessments assigned. Your direct manager or HR administrator will assign relevant assessments for your leadership track.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3.5">
+                    {(activeTab === 'history' ? completedAssessments : displayAssessments).map((ass) => (
+                      <div
+                        key={ass.id}
+                        className="p-4 bg-slate-50/70 hover:bg-slate-100/60 rounded-2xl border border-slate-200/70 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all"
+                      >
+                        <div className="flex items-start space-x-3.5">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold mt-0.5 ${
+                            ass.status === 'Completed'
+                              ? 'bg-emerald-100 text-emerald-600'
+                              : ass.status === 'In Progress'
+                              ? 'bg-amber-100 text-amber-600'
+                              : 'bg-indigo-100 text-indigo-600'
+                          }`}>
+                            <CheckSquare className="w-5 h-5 stroke-[2]" />
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-extrabold text-slate-900 text-sm">{ass.assessment_title}</span>
+                              {ass.status === 'In Progress' && (
+                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                                  In Progress
+                                </span>
+                              )}
+                              {ass.status === 'Assigned' && (
+                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
+                                  Assigned
+                                </span>
+                              )}
+                              {ass.status === 'Completed' && (
+                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
+                                  Completed
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">{ass.description || `Assigned evaluation for ${ass.role_name}`}</p>
+                            <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 mt-2 font-medium">
+                              <span className="flex items-center space-x-1">
+                                <Calendar className="w-3.5 h-3.5 text-indigo-500" />
+                                <span>HR-Assigned Date: <strong className="text-slate-800">{ass.scheduled_date || ass.due_date || 'Standard'}</strong></span>
+                              </span>
+                              {ass.start_time && (
+                                <span className="flex items-center space-x-1">
+                                  <Clock className="w-3.5 h-3.5 text-indigo-500" />
+                                  <span>Window: <strong className="text-slate-800">{ass.start_time} - {ass.end_time || 'End'} ({ass.time_zone || 'IST'})</strong></span>
+                                </span>
+                              )}
+                              <span className="flex items-center space-x-1">
+                                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Duration: <strong className="text-slate-800">{ass.duration_minutes || ass.duration || 30} mins</strong></span>
+                              </span>
+                            </div>
+                            {ass.instructions && (
+                              <p className="text-[10px] text-slate-400 italic mt-1">
+                                Instructions: {ass.instructions}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          {ass.status === 'Completed' ? (
+                            <button
+                              onClick={() => navigate(`/take-assessment/${ass.id}`)}
+                              className="px-4 py-2 border border-indigo-600 text-indigo-600 hover:bg-indigo-50 font-bold rounded-xl text-xs transition-colors"
+                            >
+                              View Results
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => navigate(`/take-assessment/${ass.id}`)}
+                              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-600/30 transition-all"
+                            >
+                              Start Assessment
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -436,14 +490,14 @@ export const EmployeeDashboard = () => {
         <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-6">
           <div className="flex items-center space-x-4 pb-6 border-b border-slate-100">
             <div className="w-20 h-20 rounded-full bg-indigo-600 text-white flex items-center justify-center font-extrabold text-2xl shadow-lg shadow-indigo-600/30">
-              {employeeProfile?.name ? employeeProfile.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase() : 'AK'}
+              {initials}
             </div>
             <div>
-              <h2 className="text-xl font-extrabold text-slate-900">{employeeProfile?.name || 'Arun Kumar'}</h2>
-              <p className="text-sm font-semibold text-slate-500">{employeeProfile?.designation || 'Senior Developer'}</p>
+              <h2 className="text-xl font-extrabold text-slate-900">{displayName}</h2>
+              <p className="text-sm font-semibold text-slate-500">{displayDesignation}</p>
               <div className="flex items-center space-x-2 mt-2">
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-indigo-50 text-indigo-600 border border-indigo-200">
-                  {user.role || 'Employee'}
+                  {user?.role || 'Employee'}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-50 text-emerald-600 border border-emerald-200">
                   Active Account
@@ -457,19 +511,19 @@ export const EmployeeDashboard = () => {
               <h4 className="font-extrabold text-slate-900 border-b border-slate-100 pb-2">Personal & Employment Information</h4>
               <div className="flex justify-between py-2 border-b border-slate-50">
                 <span className="text-slate-500">Full Name</span>
-                <span className="font-bold text-slate-800">{employeeProfile?.name || 'Arun Kumar'}</span>
+                <span className="font-bold text-slate-800">{displayName}</span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-50">
                 <span className="text-slate-500">Corporate Email</span>
-                <span className="font-bold text-slate-800">{employeeProfile?.email || 'arun.kumar@company.com'}</span>
+                <span className="font-bold text-slate-800">{displayEmail}</span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-50">
                 <span className="text-slate-500">Department</span>
-                <span className="font-bold text-slate-800">{employeeProfile?.department || 'Information Technology'}</span>
+                <span className="font-bold text-slate-800">{displayDepartment}</span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-50">
                 <span className="text-slate-500">Reporting Manager</span>
-                <span className="font-bold text-slate-800">{employeeProfile?.manager_name || 'Sneha Reddy'}</span>
+                <span className="font-bold text-slate-800">{displayManager}</span>
               </div>
             </div>
 
@@ -477,18 +531,94 @@ export const EmployeeDashboard = () => {
               <h4 className="font-extrabold text-slate-900 border-b border-slate-100 pb-2">Experience & Metrics</h4>
               <div className="flex justify-between py-2 border-b border-slate-50">
                 <span className="text-slate-500">Years of Experience</span>
-                <span className="font-bold text-slate-800">{employeeProfile?.experience_years || 4} Years</span>
+                <span className="font-bold text-slate-800">
+                  {employeeProfile?.experience_years != null ? `${employeeProfile.experience_years} Years` : 'Not recorded'}
+                </span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-50">
                 <span className="text-slate-500">Performance Score</span>
-                <span className="font-bold text-slate-800">{employeeProfile?.performance_score || 78} / 100</span>
+                <span className="font-bold text-slate-800">
+                  {employeeProfile?.performance_score != null ? `${employeeProfile.performance_score} / 100` : 'Pending evaluation'}
+                </span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-50">
                 <span className="text-slate-500">Leadership Readiness Score</span>
-                <span className="font-bold text-indigo-600">{readinessData?.readiness_score || 82}%</span>
+                <span className="font-bold text-indigo-600">
+                  {readinessData?.readiness_score != null ? `${readinessData.readiness_score}%` : 'Pending'}
+                </span>
               </div>
             </div>
           </div>
+
+          {/* Embedded Profile Sections: Projects, Experience, Skills */}
+          <div className="pt-6 border-t border-slate-100 space-y-8">
+            <ProjectExperienceSection
+              employeeId={employeeProfile?.id}
+              projects={employeeProfile?.projects || []}
+              onRefresh={fetchEmployeeData}
+              canEdit={true}
+              canVerify={false}
+            />
+
+            <EmploymentHistorySection
+              employeeId={employeeProfile?.id}
+              employeeProfile={employeeProfile}
+              history={employeeProfile?.employment_history || []}
+              onRefresh={fetchEmployeeData}
+              canEdit={true}
+              canVerify={false}
+            />
+
+            <SkillsCompetenciesSection
+              employeeId={employeeProfile?.id}
+              skills={employeeProfile?.skills || []}
+              skillGaps={employeeProfile?.skill_gaps || {}}
+              onRefresh={fetchEmployeeData}
+              canEdit={true}
+              canVerify={false}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* DEDICATED PROJECTS TAB */}
+      {activeTab === 'projects' && (
+        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm">
+          <ProjectExperienceSection
+            employeeId={employeeProfile?.id}
+            projects={employeeProfile?.projects || []}
+            onRefresh={fetchEmployeeData}
+            canEdit={true}
+            canVerify={false}
+          />
+        </div>
+      )}
+
+      {/* DEDICATED EMPLOYMENT HISTORY TAB */}
+      {activeTab === 'experience' && (
+        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm">
+          <EmploymentHistorySection
+            employeeId={employeeProfile?.id}
+            employeeProfile={employeeProfile}
+            history={employeeProfile?.employment_history || []}
+            onRefresh={fetchEmployeeData}
+            canEdit={true}
+            canVerify={false}
+          />
+        </div>
+      )}
+
+      {/* DEDICATED TECHNICAL SKILLS TAB */}
+      {activeTab === 'skills' && (
+        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm">
+          <SkillsCompetenciesSection
+            employeeId={employeeProfile?.id}
+            skills={employeeProfile?.skills || []}
+            skillGaps={employeeProfile?.skill_gaps || {}}
+            onRefresh={fetchEmployeeData}
+            canEdit={true}
+            canVerify={false}
+          />
         </div>
       )}
 
@@ -505,39 +635,48 @@ export const EmployeeDashboard = () => {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {(gapData?.competencies || [
-              { name: 'System Architecture & Technical Design', current_score: 82, target_score: 90, status: 'Minor Gap' },
-              { name: 'Strategic Leadership & Team Guidance', current_score: 75, target_score: 85, status: 'Gap' },
-              { name: 'Cross-functional Project Management', current_score: 88, target_score: 85, status: 'Strength' },
-              { name: 'Communication & Stakeholder Management', current_score: 80, target_score: 85, status: 'Minor Gap' }
-            ]).map((comp, idx) => (
-              <div key={idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-extrabold text-slate-900 text-xs">{comp.name}</span>
-                  <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full ${
-                    comp.status === 'Strength'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-amber-100 text-amber-700'
-                  }`}>
-                    {comp.status}
-                  </span>
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-xs text-slate-500 font-medium">
-                    <span>Current: {comp.current_score}%</span>
-                    <span>Target: {comp.target_score}%</span>
-                  </div>
-                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-indigo-600 rounded-full"
-                      style={{ width: `${comp.current_score}%` }}
-                    />
-                  </div>
-                </div>
+          {(!gapData?.competencies || gapData.competencies.length === 0) ? (
+            <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center justify-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-500 flex items-center justify-center">
+                <ShieldAlert className="w-6 h-6 stroke-[2]" />
               </div>
-            ))}
-          </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">No Competency Data Recorded</h4>
+                <p className="text-xs text-slate-500 max-w-sm mt-1">
+                  Complete assigned leadership assessments to automatically populate your competency evaluations and gap analysis.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {gapData.competencies.map((comp, idx) => (
+                <div key={idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-slate-900 text-xs">{comp.name}</span>
+                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full ${
+                      comp.status === 'Strength'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {comp.status}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs text-slate-500 font-medium">
+                      <span>Current: {comp.current_score}%</span>
+                      <span>Target: {comp.target_score}%</span>
+                    </div>
+                    <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-indigo-600 rounded-full"
+                        style={{ width: `${comp.current_score}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -554,8 +693,16 @@ export const EmployeeDashboard = () => {
 
           <div className="space-y-4">
             {completedAssessments.length === 0 ? (
-              <div className="p-8 text-center text-slate-500 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs font-semibold">
-                No completed assessments found yet. Complete assigned assessments to view detailed results.
+              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center justify-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-500 flex items-center justify-center">
+                  <Award className="w-6 h-6 stroke-[2]" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800">No Completed Assessments Yet</h4>
+                  <p className="text-xs text-slate-500 max-w-sm mt-1">
+                    Once you complete an assessment, detailed score breakdowns and role readiness evaluations will be visible here.
+                  </p>
+                </div>
               </div>
             ) : (
               completedAssessments.map((ass) => (
@@ -567,7 +714,7 @@ export const EmployeeDashboard = () => {
                   </div>
                   <div className="flex items-center space-x-4">
                     <div className="text-right">
-                      <p className="text-3xl font-extrabold text-indigo-600">{ass.overall_score || ass.result?.overall_score || 85}<span className="text-sm font-semibold text-slate-500">%</span></p>
+                      <p className="text-3xl font-extrabold text-indigo-600">{ass.overall_score || ass.result?.overall_score || 0}<span className="text-sm font-semibold text-slate-500">%</span></p>
                       <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                         Completed
                       </span>
@@ -600,16 +747,25 @@ export const EmployeeDashboard = () => {
           <div className="p-6 bg-gradient-to-r from-indigo-900 to-slate-900 text-white rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-6">
             <div>
               <p className="text-xs font-bold text-indigo-300 uppercase tracking-wider">Overall Succession Readiness</p>
-              <h2 className="text-4xl font-extrabold text-white mt-1">{readinessData?.readiness_score || 82}%</h2>
-              <p className="text-xs text-indigo-200 mt-1">High potential candidate for leadership promotion</p>
+              <h2 className="text-4xl font-extrabold text-white mt-1">
+                {readinessData?.readiness_score != null ? `${readinessData.readiness_score}%` : 'Pending'}
+              </h2>
+              <p className="text-xs text-indigo-200 mt-1">
+                {readinessData?.readiness_level 
+                  ? `${readinessData.readiness_level} readiness candidate for leadership consideration` 
+                  : 'Complete assigned assessments to determine readiness ranking'}
+              </p>
             </div>
             <div className="w-full sm:w-64 space-y-2">
               <div className="flex justify-between text-xs font-bold">
                 <span>Succession Threshold</span>
-                <span>82% vs 75% Target</span>
+                <span>{readinessData?.readiness_score || 0}% vs 75% Target</span>
               </div>
               <div className="w-full h-3 bg-indigo-950 rounded-full overflow-hidden border border-indigo-800">
-                <div className="h-full bg-emerald-400 rounded-full" style={{ width: '82%' }} />
+                <div 
+                  className="h-full bg-emerald-400 rounded-full" 
+                  style={{ width: `${Math.min(100, readinessData?.readiness_score || 0)}%` }} 
+                />
               </div>
             </div>
           </div>
@@ -627,28 +783,41 @@ export const EmployeeDashboard = () => {
             <BookOpen className="w-6 h-6 text-purple-600" />
           </div>
 
-          <div className="space-y-4">
-            {[
-              { title: 'Advanced System Design & Scalability', timeline: 'Target: Q1 2025', status: 'In Progress', progress: 60 },
-              { title: 'Executive Leadership & Mentorship Workshop', timeline: 'Target: Q2 2025', status: 'Assigned', progress: 20 },
-              { title: 'Strategic Communication & Stakeholder Alignment', timeline: 'Target: Q2 2025', status: 'Assigned', progress: 0 }
-            ].map((plan, i) => (
-              <div key={i} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-extrabold text-slate-900 text-xs">{plan.title}</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">{plan.timeline}</p>
-                  </div>
-                  <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                    {plan.status}
-                  </span>
-                </div>
-                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
-                  <div className="h-full bg-purple-600 rounded-full" style={{ width: `${plan.progress}%` }} />
-                </div>
+          {rawGaps.length === 0 ? (
+            <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center justify-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <CheckCircle2 className="w-6 h-6 stroke-[2]" />
               </div>
-            ))}
-          </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">No Critical Skill Gaps Identified</h4>
+                <p className="text-xs text-slate-500 max-w-sm mt-1">
+                  All current evaluated competencies meet required role benchmarks. Continue maintaining your excellent standards!
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {rawGaps.map((gap, i) => (
+                <div key={i} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-extrabold text-slate-900 text-xs">Skill Improvement: {gap.name}</h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Current Score: {gap.current_score}% | Required Target: {gap.target_score}% (Gap: {gap.gap}%)</p>
+                    </div>
+                    <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                      In Development
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-purple-600 rounded-full" 
+                      style={{ width: `${Math.min(100, Math.round((gap.current_score / (gap.target_score || 100)) * 100))}%` }} 
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -665,10 +834,10 @@ export const EmployeeDashboard = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {[
-              { name: 'Enterprise Leadership Playbook', desc: 'Guide to leadership competencies and successor benchmarks' },
-              { name: 'System Architecture Fundamentals', desc: 'Technical mastery guide for Senior Developers' },
-              { name: 'Cross-functional Collaboration Guidelines', desc: 'Best practices for team alignment and communication' },
-              { name: 'AI Succession Readiness Documentation', desc: 'How readiness scores are calculated and improved' }
+              { name: 'Enterprise Leadership Framework', desc: 'Guide to leadership competencies and successor benchmarks' },
+              { name: 'Technical Leadership & Architecture Mastery', desc: 'Best practices for scalable system architecture and design' },
+              { name: 'Strategic Alignment & Stakeholder Collaboration', desc: 'Guidelines for cross-functional communication and team execution' },
+              { name: 'AI Succession Readiness Documentation', desc: 'Methodology behind gap analysis models and machine learning readiness' }
             ].map((res, idx) => (
               <div key={idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-start justify-between">
                 <div>
@@ -698,7 +867,7 @@ export const EmployeeDashboard = () => {
               <div>
                 <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">My Competency Gaps</p>
                 <p className="text-2xl font-extrabold text-slate-900 mt-0.5">{gapCount}</p>
-                <p className="text-[11px] text-slate-500 font-medium">Areas need improvement</p>
+                <p className="text-[11px] text-slate-500 font-medium">Areas needing improvement</p>
               </div>
             </div>
             <ArrowRight className="w-4 h-4 text-indigo-600" />
@@ -714,15 +883,15 @@ export const EmployeeDashboard = () => {
               </div>
               <div>
                 <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Development Plan</p>
-                <p className="text-2xl font-extrabold text-slate-900 mt-0.5">3</p>
-                <p className="text-[11px] text-slate-500 font-medium">Recommended learning areas</p>
+                <p className="text-2xl font-extrabold text-slate-900 mt-0.5">{gapCount}</p>
+                <p className="text-[11px] text-slate-500 font-medium">Active skill goals</p>
               </div>
             </div>
             <ArrowRight className="w-4 h-4 text-indigo-600" />
           </div>
 
           <div
-            onClick={() => navigate('/resources')}
+            onClick={() => navigate('/assessment-history')}
             className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm flex items-center justify-between hover:shadow-md transition-all cursor-pointer"
           >
             <div className="flex items-center space-x-4">
@@ -730,9 +899,15 @@ export const EmployeeDashboard = () => {
                 <Activity className="w-6 h-6 stroke-[2]" />
               </div>
               <div>
-                <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Recent Activity</p>
-                <p className="text-xs font-bold text-slate-800 mt-1">Submitted Assessment</p>
-                <p className="text-[10px] text-slate-400">2 days ago</p>
+                <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Assessment Status</p>
+                <p className="text-xs font-bold text-slate-800 mt-1">
+                  {completedAssessments.length > 0 
+                    ? `${completedAssessments.length} assessment${completedAssessments.length > 1 ? 's' : ''} completed` 
+                    : 'No assessments completed'}
+                </p>
+                <p className="text-[10px] text-slate-400">
+                  {pendingAssessments.length > 0 ? `${pendingAssessments.length} pending action` : 'Up to date'}
+                </p>
               </div>
             </div>
             <ArrowRight className="w-4 h-4 text-indigo-600" />

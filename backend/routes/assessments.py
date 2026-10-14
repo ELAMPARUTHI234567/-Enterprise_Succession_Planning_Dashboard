@@ -10,7 +10,15 @@ from services.gap_service import calculate_competency_gaps
 from services.readiness_service import calculate_successor_readiness
 from services.ml_service import run_ml_readiness_prediction
 from utils.auth_middleware import get_current_user, require_role
-from datetime import datetime
+from datetime import datetime, timedelta
+from models.notification import Notification
+from services.scheduling_service import (
+    check_scheduling_conflicts,
+    validate_and_save_manual_schedules,
+    check_assessment_start_permission,
+    calculate_end_time_str,
+    create_utc_datetime
+)
 
 assessments_bp = Blueprint('assessments', __name__)
 
@@ -324,6 +332,22 @@ def submit_assessment(assignment_id):
             if not employee or assignment.employee_id != employee.id:
                 return jsonify({"success": False, "message": "Access forbidden: You cannot submit an assessment assigned to another employee"}), 403
 
+    # Prevent duplicate submission
+    if assignment.status == 'Completed':
+        return jsonify({"success": False, "message": "This assessment has already been completed and submitted."}), 400
+
+    # Backend deadline enforcement (with 60-second grace period for network latency)
+    if assignment.submission_deadline:
+        now_utc = datetime.utcnow()
+        if now_utc > (assignment.submission_deadline + timedelta(seconds=60)):
+            assignment.status = 'Completed'
+            assignment.schedule_status = 'Missed'
+            db.session.commit()
+            return jsonify({
+                "success": False,
+                "message": "Submission rejected: The assessment deadline has expired. Contact HR to request a rescheduled session."
+            }), 403
+
     data = request.get_json() or {}
     answers_input = data.get('answers', {})
 
@@ -422,6 +446,9 @@ def submit_assessment(assignment_id):
     detail["_total_possible"] = round(total_possible, 2)
 
     result.set_detail(detail)
+    assignment.status = 'Completed'
+    assignment.schedule_status = 'Completed'
+    assignment.submitted_at = datetime.utcnow()
     db.session.commit()
 
     target_role_id = assignment.assessment.role_id if assignment.assessment else 1
@@ -692,5 +719,391 @@ def get_assessment_result(assignment_id):
     return jsonify({
         "success": True,
         "data": data
+    }), 200
+
+# =========================================================================
+# MODULE 5: HR-CONTROLLED MANUAL ASSESSMENT SCHEDULING & TIMING ENFORCEMENT
+# =========================================================================
+
+@assessments_bp.route('/assessment-schedules/check-conflicts', methods=['POST'])
+def check_conflicts():
+    user, _, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    data = request.get_json() or {}
+    schedules = data.get('schedules')
+    if schedules is None:
+        schedules = data.get('assignments')
+    if not schedules or not isinstance(schedules, list):
+        schedules = []
+    res = check_scheduling_conflicts(schedules)
+
+    return jsonify({
+        "success": True,
+        "has_blocking_conflicts": res["has_blocking_conflicts"],
+        "conflicts": res["conflicts"]
+    }), 200
+
+@assessments_bp.route('/assessment-schedules/batch-save', methods=['POST'])
+def batch_save_schedules():
+    user, _, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    data = request.get_json() or {}
+    assessment_id = data.get('assessment_id')
+    schedules = data.get('schedules')
+    if schedules is None:
+        schedules = data.get('assignments')
+
+    # Defensive check: if assessment_id was passed as a dict
+    if isinstance(assessment_id, dict):
+        nested = assessment_id
+        if not schedules:
+            schedules = nested.get('schedules') or nested.get('assignments')
+        assessment_id = nested.get('assessment_id')
+        if not data.get('role_id') and nested.get('role_id'):
+            data['role_id'] = nested.get('role_id')
+        if not data.get('title') and nested.get('title'):
+            data['title'] = nested.get('title')
+
+    if not assessment_id:
+        role_id = data.get('role_id') or data.get('target_role_id')
+        title = str(data.get('title') or '').strip()
+        if role_id:
+            role = LeadershipRole.query.get(role_id)
+            existing = None
+            if title:
+                existing = Assessment.query.filter_by(role_id=role_id, title=title).first()
+            if not existing:
+                existing = Assessment.query.filter_by(role_id=role_id).first()
+            if existing:
+                assessment_id = existing.id
+            else:
+                new_ass = Assessment(
+                    title=title or (f"{role.role_name} Leadership Assessment" if role else f"Role #{role_id} Leadership Assessment"),
+                    description=str(data.get('description') or 'Manual HR-scheduled leadership assessment.').strip(),
+                    created_by=user.id,
+                    role_id=role_id,
+                    duration=30,
+                    passing_threshold=70.0
+                )
+                db.session.add(new_ass)
+                db.session.flush()
+                assessment_id = new_ass.id
+
+    if not assessment_id:
+        return jsonify({"success": False, "message": "Assessment ID or target leadership role is required"}), 400
+
+    if not schedules or not isinstance(schedules, list):
+        return jsonify({"success": False, "message": "Schedules list is required and cannot be empty"}), 400
+
+    global_tz = str(data.get('time_zone') or 'IST (Asia/Kolkata)').strip()
+    for s in schedules:
+        if isinstance(s, dict) and not s.get('time_zone'):
+            s['time_zone'] = global_tz
+
+    saved, err, err_code = validate_and_save_manual_schedules(assessment_id, schedules, user.id)
+    if err:
+        return jsonify({"success": False, "message": err}), err_code
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "assignments": saved,
+            "created_count": len(saved)
+        },
+        "message": f"Successfully assigned and saved schedules for {len(saved)} employee(s)."
+    }), 201
+
+@assessments_bp.route('/assessment-schedules', methods=['GET'])
+def get_assessment_schedules():
+    user, current_emp, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    query = AssessmentAssignment.query.filter(AssessmentAssignment.scheduled_date.isnot(None))
+
+    role_lower = user.role.lower()
+    if role_lower not in ['hr', 'admin']:
+        if role_lower == 'manager':
+            if not current_emp:
+                return jsonify({"success": True, "data": []}), 200
+            team_members = Employee.query.filter(
+                (Employee.manager_id == current_emp.id) | (Employee.id == current_emp.id)
+            ).all()
+            team_ids = [e.id for e in team_members]
+            query = query.filter(AssessmentAssignment.employee_id.in_(team_ids))
+        else: # Employee: strict data isolation
+            if not current_emp:
+                return jsonify({"success": True, "data": []}), 200
+            query = query.filter_by(employee_id=current_emp.id)
+
+    status_filter = request.args.get('status')
+    if status_filter and status_filter != 'All':
+        query = query.filter(
+            (AssessmentAssignment.schedule_status == status_filter) |
+            (AssessmentAssignment.status == status_filter)
+        )
+
+    date_filter = request.args.get('date')
+    if date_filter:
+        query = query.filter(AssessmentAssignment.scheduled_date == date_filter)
+
+    role_id_filter = request.args.get('role_id', type=int)
+    if role_id_filter:
+        query = query.join(Assessment).filter(Assessment.role_id == role_id_filter)
+
+    schedules = query.order_by(AssessmentAssignment.scheduled_date.desc(), AssessmentAssignment.start_time.asc()).all()
+
+    return jsonify({
+        "success": True,
+        "data": [s.to_dict() for s in schedules]
+    }), 200
+
+@assessments_bp.route('/assessment-schedules/<int:assignment_id>/reschedule', methods=['PUT'])
+def reschedule_assessment(assignment_id):
+    user, _, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    assignment = AssessmentAssignment.query.get(assignment_id)
+    if not assignment:
+        return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
+
+    data = request.get_json() or {}
+    sc_date = str(data.get('scheduled_date', '')).strip()
+    st_time = str(data.get('start_time', '')).strip()
+    duration = data.get('duration_minutes')
+    time_zone = str(data.get('time_zone') or assignment.time_zone or 'UTC').strip()
+    instructions = data.get('instructions')
+
+    if not sc_date or not st_time or not duration:
+        return jsonify({"success": False, "message": "Explicit date, start time, and duration are required to reschedule"}), 400
+
+    duration = int(duration)
+    end_time_calc = calculate_end_time_str(st_time, duration)
+
+    # Check conflicts for rescheduled slot
+    conflict_check = check_scheduling_conflicts([{
+        "assignment_id": assignment_id,
+        "employee_id": assignment.employee_id,
+        "employee_name": assignment.employee.name if assignment.employee else "",
+        "scheduled_date": sc_date,
+        "start_time": st_time,
+        "duration_minutes": duration
+    }])
+
+    if conflict_check["has_blocking_conflicts"]:
+        err_msgs = [c["message"] for c in conflict_check["conflicts"] if c["severity"] == "error"]
+        return jsonify({"success": False, "message": f"Conflict detected: {'; '.join(err_msgs)}"}), 409
+
+    start_utc = create_utc_datetime(sc_date, st_time, time_zone)
+    end_utc = start_utc + timedelta(minutes=duration) if start_utc else create_utc_datetime(sc_date, end_time_calc, time_zone)
+
+    assignment.scheduled_date = sc_date
+    assignment.start_time = st_time
+    assignment.duration_minutes = duration
+    assignment.end_time = end_time_calc
+    assignment.time_zone = time_zone
+    assignment.scheduled_start_datetime = start_utc
+    assignment.scheduled_end_datetime = end_utc
+    assignment.due_date = f"{sc_date} {end_time_calc}"
+    assignment.status = 'Scheduled'
+    assignment.schedule_status = 'Scheduled'
+    if instructions:
+        assignment.instructions = instructions.strip()
+
+    # Create in-app notification for the employee
+    if assignment.employee and assignment.employee.user_id:
+        notif = Notification(
+            user_id=assignment.employee.user_id,
+            title="Assessment Rescheduled",
+            message=f"HR has rescheduled your assessment '{assignment.assessment.title if assignment.assessment else ''}' to {sc_date} at {st_time} ({duration} mins).",
+            type="schedule_updated",
+            link="/employee-dashboard"
+        )
+        db.session.add(notif)
+
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "data": assignment.to_dict(),
+        "message": "Assessment successfully rescheduled"
+    }), 200
+
+@assessments_bp.route('/assessment-schedules/<int:assignment_id>/cancel', methods=['POST'])
+def cancel_assessment_schedule(assignment_id):
+    user, _, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    assignment = AssessmentAssignment.query.get(assignment_id)
+    if not assignment:
+        return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
+
+    data = request.get_json() or {}
+    reason = data.get('reason', 'Cancelled by HR administration').strip()
+
+    assignment.status = 'Cancelled'
+    assignment.schedule_status = 'Cancelled'
+
+    if assignment.employee and assignment.employee.user_id:
+        notif = Notification(
+            user_id=assignment.employee.user_id,
+            title="Assessment Cancelled",
+            message=f"The scheduled session for '{assignment.assessment.title if assignment.assessment else ''}' on {assignment.scheduled_date} has been cancelled: {reason}.",
+            type="assessment_cancelled",
+            link="/employee-dashboard"
+        )
+        db.session.add(notif)
+
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "data": assignment.to_dict(),
+        "message": "Assessment appointment cancelled"
+    }), 200
+
+@assessments_bp.route('/assessment-assignments/<int:assignment_id>/start', methods=['POST'])
+def start_assessment_attempt(assignment_id):
+    """
+    Backend Authoritative Start Window & Timer Initiation:
+    Ensures that the attempt is strictly authorized, records the exact start timestamp,
+    calculates the authoritative submission deadline, and marks status as 'In-Progress'.
+    """
+    user, current_emp, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    assignment = AssessmentAssignment.query.get(assignment_id)
+    if not assignment:
+        return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
+
+    is_admin = user.role.lower() in ['hr', 'admin']
+    curr_emp_id = current_emp.id if current_emp else None
+
+    can_start, reason, status_code = check_assessment_start_permission(
+        assignment, current_user_employee_id=curr_emp_id, is_admin=is_admin
+    )
+    if not can_start:
+        return jsonify({"success": False, "message": reason}), status_code
+
+    now_utc = datetime.utcnow()
+    duration = assignment.duration_minutes or (assignment.assessment.duration if assignment.assessment else 30)
+
+    # Set actual start time if not already started
+    if not assignment.actual_start_time:
+        assignment.actual_start_time = now_utc
+        assignment.submission_deadline = now_utc + timedelta(minutes=duration)
+        assignment.status = 'In-Progress'
+        assignment.schedule_status = 'In-Progress'
+        db.session.commit()
+
+    # Calculate remaining seconds against the authoritative backend deadline
+    remaining_seconds = max(0, int((assignment.submission_deadline - now_utc).total_seconds()))
+
+    return jsonify({
+        "success": True,
+        "message": "Assessment attempt started successfully.",
+        "data": {
+            "assignment_id": assignment_id,
+            "actual_start_time": assignment.actual_start_time.isoformat() + "Z" if assignment.actual_start_time else None,
+            "submission_deadline": assignment.submission_deadline.isoformat() + "Z" if assignment.submission_deadline else None,
+            "duration_minutes": duration,
+            "duration_seconds": duration * 60,
+            "seconds_remaining": remaining_seconds,
+            "remaining_seconds": remaining_seconds,
+            "time_zone": assignment.time_zone or "IST (Asia/Kolkata)"
+        }
+    }), 200
+
+@assessments_bp.route('/assessment-assignments/<int:assignment_id>/window-status', methods=['GET'])
+def get_window_status(assignment_id):
+    user, current_emp, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    assignment = AssessmentAssignment.query.get(assignment_id)
+    if not assignment:
+        return jsonify({"success": False, "message": "Assessment assignment not found"}), 404
+
+    is_admin = user.role.lower() in ['hr', 'admin']
+    curr_emp_id = current_emp.id if current_emp else None
+
+    can_start, reason, status_code = check_assessment_start_permission(
+        assignment, current_user_employee_id=curr_emp_id, is_admin=is_admin
+    )
+
+    now_utc = datetime.utcnow()
+    early_window = assignment.scheduled_start_datetime - timedelta(minutes=15) if assignment.scheduled_start_datetime else None
+
+    is_expired = False
+    if assignment.scheduled_end_datetime and now_utc > assignment.scheduled_end_datetime:
+        is_expired = True
+
+    is_early = False
+    if early_window and now_utc < early_window:
+        is_early = True
+
+    seconds_until_start = 0
+    if assignment.scheduled_start_datetime and now_utc < assignment.scheduled_start_datetime:
+        seconds_until_start = max(0, int((assignment.scheduled_start_datetime - now_utc).total_seconds()))
+
+    seconds_until_open = 0
+    if early_window and now_utc < early_window:
+        seconds_until_open = max(0, int((early_window - now_utc).total_seconds()))
+
+    seconds_remaining = None
+    if assignment.submission_deadline:
+        seconds_remaining = max(0, int((assignment.submission_deadline - now_utc).total_seconds()))
+    elif assignment.scheduled_end_datetime and not is_expired and not is_early:
+        seconds_remaining = (assignment.duration_minutes or 30) * 60
+
+    window_status_str = "open" if can_start else ("expired" if is_expired else ("early" if is_early else "locked"))
+
+    response_data = {
+        "assignment_id": assignment_id,
+        "window_status": window_status_str,
+        "can_start": can_start,
+        "window_open": can_start,
+        "permitted": can_start,
+        "is_expired": is_expired,
+        "is_early": is_early,
+        "reason": reason,
+        "message": reason,
+        "schedule_status": assignment.schedule_status or assignment.status,
+        "scheduled_date": assignment.scheduled_date,
+        "start_time": assignment.start_time,
+        "end_time": assignment.end_time,
+        "duration_minutes": assignment.duration_minutes or 30,
+        "time_zone": assignment.time_zone or "IST (Asia/Kolkata)",
+        "scheduled_start": f"{assignment.scheduled_date} {assignment.start_time} ({assignment.time_zone or 'UTC'})",
+        "scheduled_end": f"{assignment.scheduled_date} {assignment.end_time} ({assignment.time_zone or 'UTC'})",
+        "scheduled_start_utc": assignment.scheduled_start_datetime.isoformat() + "Z" if assignment.scheduled_start_datetime else None,
+        "scheduled_end_utc": assignment.scheduled_end_datetime.isoformat() + "Z" if assignment.scheduled_end_datetime else None,
+        "current_server_time_utc": now_utc.isoformat() + "Z",
+        "actual_start_time": assignment.actual_start_time.isoformat() + "Z" if assignment.actual_start_time else None,
+        "submission_deadline": assignment.submission_deadline.isoformat() + "Z" if assignment.submission_deadline else None,
+        "seconds_until_start": seconds_until_start,
+        "seconds_until_open": seconds_until_open,
+        "seconds_remaining": seconds_remaining,
+        "remaining_seconds": seconds_remaining,
+        "is_in_progress": assignment.status == 'In-Progress',
+        "is_completed": assignment.status == 'Completed'
+    }
+
+    return jsonify({
+        "success": True,
+        "window_status": window_status_str,
+        "can_start": can_start,
+        "window_open": can_start,
+        "permitted": can_start,
+        "is_expired": is_expired,
+        "message": reason,
+        "data": response_data
     }), 200
 

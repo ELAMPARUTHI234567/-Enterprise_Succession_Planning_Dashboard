@@ -10,6 +10,7 @@ from routes.analytics import analytics_bp
 from routes.ml import ml_bp
 from routes.reports import reports_bp
 from routes.question_bank import question_bank_bp
+from routes.notifications import notifications_bp
 
 __all__ = [
     "auth_bp",
@@ -23,5 +24,6 @@ __all__ = [
     "analytics_bp",
     "ml_bp",
     "reports_bp",
-    "question_bank_bp"
+    "question_bank_bp",
+    "notifications_bp"
 ]

@@ -8,16 +8,25 @@ from models.employee_competency import EmployeeCompetency
 from models.assessment import Assessment, AssessmentQuestion, AssessmentAssignment, AssessmentAnswer, AssessmentResult
 from models.successor_result import SuccessorResult
 from models.ml_prediction import MLPrediction
+import os
+from config import Config
 from utils.seed_question_bank import seed_question_bank
 
 def seed_database_if_empty():
     """
     Populates database with initial demonstration accounts (HR, Manager, Employee),
     20 sample employees, leadership roles, competencies, sample assessments, questions, and assignments.
+    Only runs in local development environment when empty. Never in production.
     """
-    if User.query.first() is not None:
-        print("[INFO] Database already contains data. Verifying built-in Question Bank...")
+    if Config.IS_PRODUCTION or os.getenv("DISABLE_DEMO_SEEDING", "false").lower() == "true":
+        print("[INFO] Production mode detected or demo seeding disabled. Skipping demo data creation.")
         seed_question_bank()
+        return
+
+    if User.query.first() is not None:
+        print("[INFO] Database already contains data. Verifying built-in Question Bank & enhanced modules...")
+        seed_question_bank()
+        seed_enhanced_modules_baseline()
         return
 
     print("[INFO] Seeding initial demonstration data into database...")
@@ -282,7 +291,12 @@ def sync_employee_users():
     """
     Ensures every Employee in the database has an associated User account
     for individual authentication (e.g. arun.kumar, priya.sharma, sneha.reddy).
+    Disabled in production to avoid resetting user credentials or generating mock accounts.
     """
+    if Config.IS_PRODUCTION or os.getenv("DISABLE_DEMO_SEEDING", "false").lower() == "true":
+        print("[INFO] Production mode detected or demo sync disabled. Skipping sync_employee_users.")
+        return
+
     try:
         employees = Employee.query.all()
         created_count = 0
@@ -303,13 +317,11 @@ def sync_employee_users():
                 ).first()
 
             if existing_user:
-                # Synchronize linked account info and ensure password/status are active
+                # Synchronize linked account info and ensure status is active without touching existing passwords
                 emp.user_id = existing_user.id
                 if existing_user.username == 'employee' and emp.name == 'Arun Kumar':
                     existing_user.username = 'arun.kumar'
                     existing_user.email = 'arun.kumar@company.com'
-                if not existing_user.check_password(pwd):
-                    existing_user.set_password(pwd)
                 existing_user.status = 'Active'
                 continue
 
@@ -331,7 +343,6 @@ def sync_employee_users():
         # Also ensure 'arun.kumar' user exists explicitly if not created yet
         arun_user = User.query.filter((User.username == 'arun.kumar') | (User.username == 'employee')).first()
         if arun_user:
-            arun_user.set_password('employee123')
             arun_user.status = 'Active'
         else:
             arun_user = User(name="Arun Kumar", username="arun.kumar", email="arun.kumar@company.com", role="Employee", status="Active")
@@ -345,4 +356,188 @@ def sync_employee_users():
     except Exception as e:
         db.session.rollback()
         print(f"[WARNING] Error in sync_employee_users: {str(e)}")
+
+def seed_enhanced_modules_baseline():
+    """
+    Safely and idempotently populates baseline records for:
+    - SuitabilityConfig
+    - RoleRequiredSkills
+    - Sample EmployeeSkills, EmployeeProjects, EmploymentHistory, and company_joining_date
+    """
+    try:
+        from models.suitability_config import SuitabilityConfig
+        from models.role_required_skill import RoleRequiredSkill
+        from models.employee_project import EmployeeProject
+        from models.employment_history import EmploymentHistory
+        from models.employee_skill import EmployeeSkill
+        from models.role import LeadershipRole
+        from models.employee import Employee
+
+        # 1. Ensure SuitabilityConfig exists
+        SuitabilityConfig.get_active_config()
+
+        # 2. Seed RoleRequiredSkills if empty
+        if RoleRequiredSkill.query.count() == 0:
+            roles = LeadershipRole.query.all()
+            role_map = {r.role_name.lower(): r.id for r in roles}
+
+            default_requirements = [
+                # Project Manager
+                ("project manager", "Project Management", "Leadership & Management", 4, True, 1.2),
+                ("project manager", "Communication", "Communication & Soft Skills", 4, True, 1.0),
+                ("project manager", "Problem Solving", "Domain Specific", 3, True, 1.0),
+                ("project manager", "Agile / Scrum", "Tools & Platforms", 4, False, 0.8),
+
+                # Technical Lead
+                ("technical lead", "Python", "Programming Language", 4, True, 1.2),
+                ("technical lead", "React.js", "Framework / Library", 3, True, 1.0),
+                ("technical lead", "SQL", "Databases", 4, True, 1.0),
+                ("technical lead", "Cloud Platforms", "Cloud & DevOps", 3, True, 1.0),
+                ("technical lead", "Leadership", "Leadership & Management", 3, False, 0.8),
+
+                # Team Lead
+                ("team lead", "Java", "Programming Language", 3, True, 1.0),
+                ("team lead", "Team Management", "Leadership & Management", 4, True, 1.2),
+                ("team lead", "Communication", "Communication & Soft Skills", 4, True, 1.0),
+                ("team lead", "Problem Solving", "Domain Specific", 3, False, 0.8),
+
+                # Department Manager
+                ("department manager", "Strategic Thinking", "Leadership & Management", 4, True, 1.2),
+                ("department manager", "Budgeting & Operations", "Domain Specific", 3, True, 1.0),
+                ("department manager", "Communication", "Communication & Soft Skills", 5, True, 1.0),
+
+                # Operations Manager
+                ("operations manager", "Process Optimization", "Domain Specific", 4, True, 1.2),
+                ("operations manager", "Team Management", "Leadership & Management", 4, True, 1.0),
+                ("operations manager", "Communication", "Communication & Soft Skills", 3, False, 0.8),
+
+                # Frontend developer
+                ("frontend developer", "JavaScript", "Programming Language", 4, True, 1.2),
+                ("frontend developer", "React.js", "Framework / Library", 4, True, 1.2),
+                ("frontend developer", "CSS & Responsive Design", "Framework / Library", 3, True, 1.0),
+                ("frontend developer", "Problem Solving", "Domain Specific", 3, False, 0.8),
+            ]
+
+            added_skills = 0
+            for role_name_key, s_name, cat, min_lvl, is_mand, wt in default_requirements:
+                r_id = role_map.get(role_name_key)
+                if r_id:
+                    db.session.add(RoleRequiredSkill(
+                        role_id=r_id,
+                        skill_name=s_name,
+                        category=cat,
+                        min_proficiency_level=min_lvl,
+                        is_mandatory=is_mand,
+                        weight=wt
+                    ))
+                    added_skills += 1
+            if added_skills > 0:
+                db.session.commit()
+                print(f"[SUCCESS] Seeded {added_skills} leadership role skill standards.")
+
+        # 3. Seed Employee Joining Dates & Baseline Skills/Projects/History if missing
+        employees = Employee.query.all()
+        for emp in employees:
+            if not emp.company_joining_date:
+                offset_years = (emp.id % 4) + 1
+                emp.company_joining_date = f"{2025 - offset_years}-03-15"
+
+        db.session.commit()
+
+        # Seed baseline skills for employees if EmployeeSkill is empty
+        if EmployeeSkill.query.count() == 0 and employees:
+            skills_to_seed = [
+                ("Python", "Programming Language", 4, 3.5, 88.0, "Assessment-Verified"),
+                ("JavaScript", "Programming Language", 4, 4.0, 92.0, "Assessment-Verified"),
+                ("React.js", "Framework / Library", 4, 3.0, 85.0, "Assessment-Verified"),
+                ("SQL", "Databases", 4, 4.0, 80.0, "Assessment-Verified"),
+                ("Flask", "Framework / Library", 3, 2.5, 75.0, "Self-Reported"),
+                ("Project Management", "Leadership & Management", 3, 2.0, None, "Self-Reported"),
+                ("Leadership", "Leadership & Management", 3, 2.0, 78.0, "Reviewer-Verified"),
+                ("Communication", "Communication & Soft Skills", 4, 4.0, 85.0, "Reviewer-Verified"),
+                ("Problem Solving", "Domain Specific", 4, 4.0, 90.0, "Assessment-Verified"),
+            ]
+            for emp in employees[:10]:
+                for s_name, cat, prof, yrs, sc, ver in skills_to_seed:
+                    db.session.add(EmployeeSkill(
+                        employee_id=emp.id,
+                        skill_name=s_name,
+                        category=cat,
+                        proficiency_level=prof,
+                        years_of_experience=yrs,
+                        assessment_score=sc,
+                        verification_status=ver,
+                        evidence_notes="Verified during baseline competency onboarding" if "Verified" in ver else "Self-declared on profile"
+                    ))
+            db.session.commit()
+            print("[SUCCESS] Seeded baseline employee skills.")
+
+        # Seed baseline projects if EmployeeProject is empty
+        if EmployeeProject.query.count() == 0 and employees:
+            for emp in employees[:8]:
+                p1 = EmployeeProject(
+                    employee_id=emp.id,
+                    project_name="Core Cloud Platform Modernization",
+                    description="Migrated monolith workflows to scalable containerized microservices architecture with high availability.",
+                    role_responsibilities="Lead architect and technical executor. Designed API gateways and data pipelines.",
+                    start_date="2023-01-10",
+                    completion_date="2023-11-20",
+                    status="Completed",
+                    outcomes_kpis="Reduced latency by 35% and infrastructure cost by 22%. 100% SLA maintained.",
+                    milestones_completed_pct=95.0,
+                    deliverables_accepted_pct=98.0,
+                    quality_defect_score=90.0,
+                    timeline_adherence_pct=92.0,
+                    business_goals_achieved_pct=96.0,
+                    success_rate=94.5,
+                    verification_status="HR-Verified",
+                    supervisor_feedback="Exemplary execution and delivery against tight architectural schedules."
+                )
+                p1.set_technologies(["Python", "Flask", "Docker", "PostgreSQL", "AWS"])
+
+                p2 = EmployeeProject(
+                    employee_id=emp.id,
+                    project_name="Real-Time Analytics & Reporting Engine",
+                    description="Engineered streaming event pipeline and executive dashboard analytics.",
+                    role_responsibilities="Full-stack development, database query optimization, and UI charting.",
+                    start_date="2024-02-01",
+                    completion_date=None,
+                    status="In Progress",
+                    outcomes_kpis="Initial milestone delivered. Beta testing with 50 internal stakeholders.",
+                    milestones_completed_pct=75.0,
+                    deliverables_accepted_pct=80.0,
+                    quality_defect_score=85.0,
+                    timeline_adherence_pct=80.0,
+                    business_goals_achieved_pct=78.0,
+                    success_rate=79.5,
+                    verification_status="Self-Reported"
+                )
+                p2.set_technologies(["React.js", "Tailwind CSS", "JavaScript", "Redis"])
+
+                db.session.add_all([p1, p2])
+            db.session.commit()
+            print("[SUCCESS] Seeded baseline employee project experiences.")
+
+        # Seed baseline employment history if EmploymentHistory is empty
+        if EmploymentHistory.query.count() == 0 and employees:
+            for emp in employees[:8]:
+                h1 = EmploymentHistory(
+                    employee_id=emp.id,
+                    company_name="Apex Global Technologies",
+                    designation="Software Engineer",
+                    start_date="2019-06-01",
+                    end_date="2022-02-28",
+                    responsibilities="Developed high-throughput data processing services and enterprise client integrations.",
+                    domain="Enterprise SaaS",
+                    leadership_experience_years=1.0,
+                    is_leadership_role=False,
+                    verification_status="HR-Verified"
+                )
+                db.session.add(h1)
+            db.session.commit()
+            print("[SUCCESS] Seeded baseline employment history.")
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[WARNING] Error in seed_enhanced_modules_baseline: {str(e)}")
 

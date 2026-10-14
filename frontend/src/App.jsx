@@ -26,8 +26,16 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     return <Navigate to="/login" replace />;
   }
 
-  const user = JSON.parse(userJson);
-  const userRole = user.role || 'Employee';
+  let user;
+  try {
+    user = JSON.parse(userJson);
+  } catch (err) {
+    localStorage.removeItem('succession_token');
+    localStorage.removeItem('succession_user');
+    return <Navigate to="/login" replace />;
+  }
+
+  const userRole = user?.role || 'Employee';
 
   if (allowedRoles && !allowedRoles.includes(userRole)) {
     // Redirect based on role if trying to access unauthorized URL
@@ -48,6 +56,7 @@ export const App = () => {
     <Router>
       <Routes>
         {/* Public Login Route */}
+        <Route path="/" element={<Login />} />
         <Route path="/login" element={<Login />} />
 
         {/* HR & Admin Protected Routes */}
@@ -121,6 +130,30 @@ export const App = () => {
         />
         <Route
           path="/my-profile"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/my-projects"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/my-experience"
+          element={
+            <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
+              <EmployeeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/my-skills"
           element={
             <ProtectedRoute allowedRoles={['Employee', 'Manager', 'HR', 'Admin']}>
               <EmployeeDashboard />

@@ -37,3 +37,4 @@ backend/succession_planning.db
 .idea/
 .DS_Store
 Thumbs.db
+tmp/

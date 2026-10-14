@@ -11,7 +11,7 @@ from routes import (
     auth_bp, employees_bp, roles_bp, competencies_bp,
     assessments_bp, gap_analysis_bp, successors_bp,
     dashboard_bp, analytics_bp, ml_bp, reports_bp,
-    question_bank_bp
+    question_bank_bp, notifications_bp
 )
 
 def mask_db_uri(uri):
@@ -36,9 +36,14 @@ def create_app():
     # Enable CORS
     import re
     allowed_defaults = [
+        "http://localhost:3000",
         "http://localhost:3002",
         "http://localhost:5173",
-        "http://localhost:3000",
+        "http://localhost:5174",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"),
         "https://enterprise-succession-dashboard.vercel.app",
         "https://enterprise-succession-planning-dashboard.vercel.app",
         "https://enterprise-succession-planning-dash.vercel.app",
@@ -67,7 +72,7 @@ def create_app():
         if origin:
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin, apikey'
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         return response
 
@@ -153,16 +158,25 @@ def create_app():
     app.register_blueprint(ml_bp, url_prefix='/api')
     app.register_blueprint(reports_bp, url_prefix='/api')
     app.register_blueprint(question_bank_bp, url_prefix='/api')
+    app.register_blueprint(notifications_bp, url_prefix='/api')
 
-    @app.route('/api/health', methods=['GET'])
+    @app.route('/api', methods=['GET', 'OPTIONS'])
+    @app.route('/api/health', methods=['GET', 'OPTIONS'])
     def health_check():
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"}), 200
         return jsonify({
             "status": "ok",
+            "success": True,
             "message": "Enterprise Succession Planning API is running"
         }), 200
 
     @app.errorhandler(404)
     def handle_404(e):
+        if request.method == 'OPTIONS':
+            resp = jsonify({"status": "ok"})
+            resp.status_code = 200
+            return add_cors_headers(resp)
         resp = jsonify({"success": False, "message": "API endpoint not found"})
         resp.status_code = 404
         return add_cors_headers(resp)

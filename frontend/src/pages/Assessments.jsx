@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { 
   Plus, UserCheck, Clock, CheckCircle2, ShieldAlert, Trash2, ArrowUp, ArrowDown, 
   HelpCircle, Save, Loader2, Play, BookOpen, Layers, Filter, CheckSquare, Square, Eye, Check,
-  Award, BarChart2, TrendingUp, Cpu, Search, RefreshCw, X, Edit, Edit2, Pencil, Shield, AlertCircle
+  Award, BarChart2, TrendingUp, Cpu, Search, RefreshCw, X, Edit, Edit2, Pencil, Shield, AlertCircle, Calendar
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import StatCard from '../components/StatCard';
 import AssessmentResultView from '../components/AssessmentResultView';
+import ManualAssessmentScheduler from '../components/ManualAssessmentScheduler';
 import { assessmentService, roleService, competencyService, employeeService, questionBankService } from '../services/api';
 
 export const Assessments = () => {
@@ -33,7 +34,7 @@ export const Assessments = () => {
 
   const navigate = useNavigate();
   const userJson = localStorage.getItem('succession_user');
-  const user = userJson ? JSON.parse(userJson) : { id: 1, role: 'HR', name: 'Sarah Jenkins' };
+  const user = userJson ? JSON.parse(userJson) : { role: 'HR', name: 'HR Administrator' };
 
   // --- QUESTION BANK STATE ---
   const [selectedBankRoleId, setSelectedBankRoleId] = useState('');
@@ -574,6 +575,15 @@ export const Assessments = () => {
             <UserCheck className="w-3.5 h-3.5" />
             <span>Assign Test</span>
           </button>
+          <button
+            onClick={() => setActiveTab('schedule')}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+              activeTab === 'schedule' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            <span>Manual Scheduling</span>
+          </button>
         </div>
       </div>
 
@@ -588,6 +598,16 @@ export const Assessments = () => {
           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           <span>{successMsg}</span>
         </div>
+      )}
+
+      {/* TAB: MANUAL ASSESSMENT SCHEDULING (Module 5) */}
+      {activeTab === 'schedule' && (
+        <ManualAssessmentScheduler
+          roles={roles}
+          employees={employees}
+          assessments={assessments}
+          onScheduleCreated={fetchData}
+        />
       )}
 
       {/* TAB 1: ASSESSMENT RESULTS & ANALYTICS */}

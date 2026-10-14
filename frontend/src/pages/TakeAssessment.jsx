@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
   CheckCircle2, Clock, AlertTriangle, ArrowLeft, ArrowRight, Save, 
-  ShieldCheck, Loader2, Check, Play, Maximize2, MonitorOff, HelpCircle 
+  ShieldCheck, Loader2, Check, Play, Maximize2, MonitorOff, HelpCircle, Calendar
 } from 'lucide-react';
 import { assessmentService } from '../services/api';
 import AssessmentResultView from '../components/AssessmentResultView';
@@ -16,17 +16,20 @@ export const TakeAssessment = () => {
   const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   
-  // Requirement 2 & 13: Initial selected state must be empty (NO default answer pre-selected)
+  // Initial selected state must be empty
   const [answers, setAnswers] = useState({}); // question_id -> option label e.g. "A"
   
-  // Requirement 4: Start screen state
+  // Start screen state & authoritative backend start window verification
   const [assessmentStarted, setAssessmentStarted] = useState(false);
+  const [windowStatus, setWindowStatus] = useState(null);
+  const [secondsUntilOpen, setSecondsUntilOpen] = useState(null);
+  const [startSubmitting, setStartSubmitting] = useState(false);
   
-  // Requirement 5 & 14: Fullscreen state & exit warning
+  // Fullscreen state & exit warning
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showFullscreenWarning, setShowFullscreenWarning] = useState(false);
 
-  // Requirement 6: Tab switch / Window switch violation tracking
+  // Tab switch / Window switch violation tracking
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [showVisibilityWarning, setShowVisibilityWarning] = useState(false);
 
@@ -37,6 +40,27 @@ export const TakeAssessment = () => {
   const [error, setError] = useState('');
   const [timeLeft, setTimeLeft] = useState(1800); // Default 30 minutes
 
+  // Authoritatively verify window status with backend
+  const checkWindow = async () => {
+    try {
+      const winRes = await assessmentService.checkWindowStatus(assignmentId);
+      if (winRes.success) {
+        const wData = winRes.data || winRes;
+        setWindowStatus(wData);
+        if (wData.seconds_until_open != null && wData.seconds_until_open > 0) {
+          setSecondsUntilOpen(wData.seconds_until_open);
+        } else {
+          setSecondsUntilOpen(0);
+        }
+        if (wData.remaining_seconds != null && wData.actual_start_time) {
+          setTimeLeft(wData.remaining_seconds);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not verify window status:', e);
+    }
+  };
+
   // Fetch assessment assignment details
   const fetchAssignmentData = async () => {
     setLoading(true);
@@ -46,15 +70,15 @@ export const TakeAssessment = () => {
       if (res.success) {
         setAssignment(res.data);
         
-        // Requirement 1: Only MCQ questions returned from API
         const mcqOnly = (res.data.questions || []).filter(
           q => !q.question_type || q.question_type.toLowerCase() === 'mcq' || q.question_type.toLowerCase() === 'multiple choice'
         );
         setQuestions(mcqOnly);
-        setTimeLeft((res.data.duration || 30) * 60);
-
-        // Requirement 2: Do NOT pre-fill default answers. Keep answers object empty.
+        setTimeLeft((res.data.duration_minutes || res.data.duration || 30) * 60);
         setAnswers({});
+
+        // Authoritatively check schedule window status with backend
+        await checkWindow();
 
         // If assessment is already completed, load result directly
         if (res.data.status === 'Completed') {
@@ -77,13 +101,32 @@ export const TakeAssessment = () => {
     fetchAssignmentData();
   }, [assignmentId]);
 
-  // Requirement 5: Request Fullscreen Mode when clicking START ASSESSMENT
-  const handleStartAssessment = () => {
-    setAssessmentStarted(true);
-    if (document.documentElement.requestFullscreen) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.warn('Fullscreen request rejected by browser:', err);
-      });
+  // Request Fullscreen & Authoritatively Start Attempt on Backend
+  const handleStartAssessment = async () => {
+    setStartSubmitting(true);
+    setError('');
+    try {
+      // Authoritative backend window check and actual start timestamp recording
+      const startRes = await assessmentService.startAttempt(assignmentId);
+      if (!startRes.success) {
+        setError(startRes.message || 'Assessment start denied by authoritative scheduling policy.');
+        return;
+      }
+
+      if (startRes.data?.remaining_seconds != null) {
+        setTimeLeft(startRes.data.remaining_seconds);
+      }
+
+      setAssessmentStarted(true);
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(err => {
+          console.warn('Fullscreen request rejected by browser:', err);
+        });
+      }
+    } catch (err) {
+      setError(err.message || 'Cannot start assessment. Check schedule window.');
+    } finally {
+      setStartSubmitting(false);
     }
   };
 
@@ -143,6 +186,54 @@ export const TakeAssessment = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, [assessmentStarted, submittedResult, timeLeft]);
+
+  // Live ticker for start window countdown (when window is not open yet)
+  useEffect(() => {
+    if (secondsUntilOpen === null || secondsUntilOpen <= 0 || assessmentStarted) return;
+    
+    const interval = setInterval(() => {
+      setSecondsUntilOpen(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          checkWindow();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [secondsUntilOpen, assessmentStarted, assignmentId]);
+
+  const formatCountdown = (totalSecs) => {
+    if (totalSecs == null || totalSecs <= 0) return '00:00';
+    const hours = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    if (hours > 0) {
+      return `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
+    }
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const getBrowserTimezoneNote = () => {
+    if (!assignment?.scheduled_start_datetime) return null;
+    try {
+      const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const assTz = assignment.time_zone || '';
+      if (!assTz.includes(browserTz) && browserTz !== 'Asia/Kolkata') {
+        const d = new Date(assignment.scheduled_start_datetime);
+        if (!isNaN(d.getTime())) {
+          const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          return `Your local browser time: ${dateStr} ${timeStr} (${browserTz})`;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return null;
+  };
 
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -268,11 +359,90 @@ export const TakeAssessment = () => {
             </div>
           </div>
 
+          {/* Authoritative HR Schedule Timing Box */}
+          {assignment?.scheduled_date && (
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Authoritative HR Assessment Schedule
+              </span>
+              <div className="flex flex-wrap items-center gap-4 text-xs font-bold text-slate-800">
+                <span className="flex items-center space-x-1.5">
+                  <Calendar className="w-4 h-4 text-indigo-600" />
+                  <span>Date: {assignment.scheduled_date}</span>
+                </span>
+                {assignment.start_time && (
+                  <span className="flex items-center space-x-1.5">
+                    <Clock className="w-4 h-4 text-indigo-600" />
+                    <span>Time Window: {assignment.start_time} - {assignment.end_time} ({assignment.time_zone || 'IST (Asia/Kolkata)'})</span>
+                  </span>
+                )}
+                <span className="flex items-center space-x-1.5">
+                  <Clock className="w-4 h-4 text-slate-400" />
+                  <span>Duration: {assignment.duration_minutes || assignment.duration || 30} Minutes</span>
+                </span>
+              </div>
+              {getBrowserTimezoneNote() && (
+                <p className="text-[11px] text-slate-500 font-medium">
+                  {getBrowserTimezoneNote()}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Schedule Window Alerts */}
+          {windowStatus && windowStatus.is_expired && (
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs font-bold text-rose-800 flex items-start space-x-2.5">
+              <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-extrabold text-rose-900">Assessment Window Expired</p>
+                <p className="mt-0.5 text-rose-700 font-medium">
+                  This session was scheduled for {assignment?.scheduled_date} ({assignment?.start_time} - {assignment?.end_time} {assignment?.time_zone || 'IST'}) and has closed. Late submissions or attempts are not permitted. Please contact HR to reschedule.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {windowStatus && !windowStatus.is_expired && (!windowStatus.window_open && !windowStatus.can_start && !windowStatus.permitted) && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-xs font-bold text-amber-800 flex items-start space-x-3">
+              <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="space-y-1.5 flex-1">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="font-extrabold text-amber-900">Start Window Locked</span>
+                  {secondsUntilOpen != null && secondsUntilOpen > 0 && (
+                    <span className="px-2.5 py-1 bg-amber-200 text-amber-900 rounded-lg font-mono font-bold text-xs tracking-wider">
+                      Opens in: {formatCountdown(secondsUntilOpen)}
+                    </span>
+                  )}
+                </div>
+                <p className="text-amber-800 font-medium text-xs">
+                  {windowStatus.reason || `Assessment window has not opened yet. Scheduled start: ${windowStatus.scheduled_start}.`}
+                </p>
+                <p className="text-[11px] text-amber-600 font-normal">
+                  Early check-in opens 15 minutes before the scheduled start time. This screen will automatically unlock when the window opens.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {windowStatus && (windowStatus.window_open || windowStatus.can_start || windowStatus.permitted) && !windowStatus.is_expired && (
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs font-bold text-emerald-800 flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              <span>Assessment Window is Open. You may begin your evaluation now.</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold rounded-2xl flex items-center space-x-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
           {/* Assessment Instructions */}
           <div className="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-5 space-y-3">
             <h3 className="text-xs font-extrabold uppercase tracking-wider text-indigo-950 flex items-center space-x-1.5">
               <ShieldCheck className="w-4 h-4 text-indigo-600" />
-              <span>Assessment Rules &amp; Instructions</span>
+              <span>Assessment Rules &amp; Authoritative Timing</span>
             </h3>
             <ul className="text-xs text-slate-700 space-y-2 font-medium">
               <li className="flex items-start space-x-2">
@@ -281,15 +451,11 @@ export const TakeAssessment = () => {
               </li>
               <li className="flex items-start space-x-2">
                 <span className="text-indigo-600 font-bold">•</span>
-                <span>You must use the assessment screen continuously in fullscreen mode.</span>
+                <span>The assessment is timed based on the authoritative backend deadline. When time expires, answers are automatically submitted.</span>
               </li>
               <li className="flex items-start space-x-2">
                 <span className="text-indigo-600 font-bold">•</span>
-                <span>Do not switch tabs, minimize, or switch windows during the assessment. Tab switches are logged.</span>
-              </li>
-              <li className="flex items-start space-x-2">
-                <span className="text-indigo-600 font-bold">•</span>
-                <span>Submit the assessment after answering all questions to calculate your competency readiness score.</span>
+                <span>You must use the assessment screen continuously in fullscreen mode without tab switching.</span>
               </li>
             </ul>
           </div>
@@ -299,10 +465,32 @@ export const TakeAssessment = () => {
             <button
               type="button"
               onClick={handleStartAssessment}
-              className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-2xl text-xs shadow-xl shadow-indigo-600/30 transition-all flex items-center justify-center space-x-2.5"
+              disabled={
+                startSubmitting || 
+                (windowStatus && (
+                  windowStatus.is_expired || 
+                  (!windowStatus.window_open && !windowStatus.can_start && !windowStatus.permitted)
+                ))
+              }
+              className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-2xl text-xs shadow-xl shadow-indigo-600/30 transition-all flex items-center justify-center space-x-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Play className="w-4 h-4 fill-white" />
-              <span>START ASSESSMENT</span>
+              {startSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>VERIFYING WINDOW PERMISSION...</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4 fill-white" />
+                  <span>
+                    {windowStatus?.is_expired 
+                      ? 'ASSESSMENT WINDOW EXPIRED' 
+                      : (windowStatus && !windowStatus.window_open && !windowStatus.can_start && !windowStatus.permitted 
+                          ? (secondsUntilOpen != null && secondsUntilOpen > 0 ? `OPENS IN ${formatCountdown(secondsUntilOpen)}` : 'START WINDOW LOCKED')
+                          : 'START ASSESSMENT')}
+                  </span>
+                </>
+              )}
             </button>
           </div>
         </div>

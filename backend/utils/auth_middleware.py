@@ -44,12 +44,18 @@ def get_current_user():
                 return None, None, "Invalid token role signature", 401
 
         if user.status != 'Active':
+            if user.status == 'Pending':
+                return None, None, "Your registration is pending HR approval. Please contact HR.", 403
             return None, None, "Account is deactivated. Please contact HR.", 403
 
         # Retrieve linked employee profile
         employee = user.employee_profile
         if not employee:
             employee = Employee.query.filter_by(user_id=user.id).first()
+
+        # Attach verified authenticated session claims to request context
+        request.auth_email = payload.get("auth_email")
+        request.auth_name = payload.get("auth_name")
 
         return user, employee, None, 200
 
