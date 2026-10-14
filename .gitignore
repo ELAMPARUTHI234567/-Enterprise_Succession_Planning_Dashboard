@@ -38,3 +38,9 @@ backend/succession_planning.db
 .DS_Store
 Thumbs.db
 tmp/
+
+# Build artifacts & local scratch utilities
+*.timestamp-*.mjs
+user_dump.txt
+backend/fix_oauth_mapping.py
+backend/query_users.py
