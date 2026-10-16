@@ -253,7 +253,11 @@ export const Login = () => {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: redirectUrl
+          redirectTo: redirectUrl,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'select_account'
+          }
         }
       });
 
@@ -261,7 +265,7 @@ export const Login = () => {
         throw oauthError;
       }
     } catch (err) {
-      setError(err.message || 'Failed to initiate Google Sign-In.');
+      setError(err?.message || 'Failed to initiate Google Sign-In. Please try again.');
       setGoogleLoading(false);
     }
   };

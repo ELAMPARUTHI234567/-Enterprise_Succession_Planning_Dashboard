@@ -1,17 +1,22 @@
 import { createClient } from '@supabase/supabase-js';
 
-const rawUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.SUPABASE_URL || '';
-const rawAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.SUPABASE_ANON_KEY || '';
+const KNOWN_SUPABASE_URL = 'https://livemvqdyupoipuajury.supabase.co';
+const KNOWN_SUPABASE_ANON_KEY = 'sb_publishable_WrkMC4kfEAQC7dAfpmln-Q_CKfrm6_0';
+const CANONICAL_PRODUCTION_URL = 'https://enterprise-succession-planning-dash.vercel.app';
+
+const rawUrl = (
+    import.meta.env.VITE_SUPABASE_URL || 
+    import.meta.env.SUPABASE_URL || 
+    KNOWN_SUPABASE_URL
+);
+const rawAnonKey = (
+    import.meta.env.VITE_SUPABASE_ANON_KEY || 
+    import.meta.env.SUPABASE_ANON_KEY || 
+    KNOWN_SUPABASE_ANON_KEY
+);
 
 const supabaseUrl = typeof rawUrl === 'string' ? rawUrl.trim().replace(/\/+$/, '') : '';
 const supabaseAnonKey = typeof rawAnonKey === 'string' ? rawAnonKey.trim() : '';
-
-if (typeof window !== 'undefined' && (!supabaseUrl || !supabaseAnonKey)) {
-    console.warn(
-        "[Auth] Supabase credentials not found in environment variables. Cloud Auth will be disabled.\n" +
-        "Make sure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are configured in Vercel Project Settings."
-    );
-}
 
 export const supabase = (supabaseUrl && supabaseAnonKey) 
     ? createClient(supabaseUrl, supabaseAnonKey, {
@@ -25,27 +30,45 @@ export const supabase = (supabaseUrl && supabaseAnonKey)
 
 /**
  * Resolves the trusted OAuth redirect URL for the active environment.
- * Production: strictly redirects to the production Vercel domain.
- * Local development: dynamically uses the active development server origin.
+ * - Production: canonical Vercel production domain (https://enterprise-succession-planning-dash.vercel.app).
+ * - Local development: dynamically uses the active local origin (e.g. http://localhost:3000 or http://localhost:5173).
+ * - Preview / Staging: dynamically uses active Vercel preview domain.
+ * - Env Override: supports VITE_AUTH_REDIRECT_URL or VITE_SITE_URL if defined.
  */
 export const getOAuthRedirectUrl = () => {
-    if (typeof window === 'undefined') {
-        return 'https://enterprise-succession-planning-dash.vercel.app/';
+    // 1. Explicit override via environment variable if configured
+    const configuredRedirect = (
+        import.meta.env.VITE_AUTH_REDIRECT_URL || 
+        import.meta.env.VITE_SITE_URL || 
+        ''
+    ).trim();
+    if (configuredRedirect) {
+        return configuredRedirect.replace(/\/+$/, '');
     }
 
-    const origin = window.location.origin;
-    const hostname = window.location.hostname;
+    // 2. Browser runtime resolution
+    if (typeof window !== 'undefined' && window.location) {
+        const origin = window.location.origin ? window.location.origin.replace(/\/+$/, '') : '';
+        const hostname = window.location.hostname || '';
 
-    // Production Vercel domain
-    if (hostname === 'enterprise-succession-planning-dash.vercel.app' || hostname.endsWith('.vercel.app')) {
-        return 'https://enterprise-succession-planning-dash.vercel.app/';
+        // Localhost development server: dynamically use active port/host (e.g. http://localhost:3000)
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') {
+            return origin || 'http://localhost:3000';
+        }
+
+        // Canonical production Vercel domain
+        if (hostname === 'enterprise-succession-planning-dash.vercel.app') {
+            return CANONICAL_PRODUCTION_URL;
+        }
+
+        // Vercel preview deployments (e.g. *.vercel.app)
+        if (hostname.endsWith('.vercel.app')) {
+            return origin || CANONICAL_PRODUCTION_URL;
+        }
+
+        return origin || CANONICAL_PRODUCTION_URL;
     }
 
-    // Localhost development server
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        return `${origin}/`;
-    }
-
-    // Default trusted fallback
-    return 'https://enterprise-succession-planning-dash.vercel.app/';
+    // 3. Fallback for SSR / static build execution
+    return CANONICAL_PRODUCTION_URL;
 };
