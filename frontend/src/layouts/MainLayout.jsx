@@ -187,7 +187,11 @@ export const MainLayout = ({ children }) => {
   const userEmail = (user?.email || '').toLowerCase();
   const oauthEmail = (user?.oauth_email || '').toLowerCase();
   const authenticatedEmail = (user?.authenticated_email || '').toLowerCase();
-  const isAuthorizedAdmin = userEmail === 'elamparuthikp@gmail.com' || 
+  const allowedRoles = Array.isArray(user?.allowed_roles) ? user.allowed_roles : [];
+  const isMultiRole = Boolean(user?.is_multi_role || allowedRoles.length > 1);
+  const isAuthorizedAdmin = isMultiRole || 
+                            (allowedRoles.includes('HR') && allowedRoles.includes('Manager')) ||
+                            userEmail === 'elamparuthikp@gmail.com' || 
                             oauthEmail === 'elamparuthikp@gmail.com' || 
                             authenticatedEmail === 'elamparuthikp@gmail.com' || 
                             (user?.role || '').toLowerCase() === 'admin';
@@ -447,6 +451,20 @@ export const MainLayout = ({ children }) => {
                 </div>
               )}
             </div>
+
+            {/* Quick Multi-Role Switch Button */}
+            {isAuthorizedAdmin && (
+              <button
+                type="button"
+                id="header-quick-switch-portal-btn"
+                onClick={() => handleSwitchRole(role === 'HR' || role === 'Admin' ? 'Manager' : 'HR')}
+                title={`Switch to ${role === 'HR' || role === 'Admin' ? 'Manager' : 'HR'} Portal`}
+                className="hidden md:inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200/80 hover:bg-indigo-100 hover:border-indigo-300 transition-all cursor-pointer shadow-sm active:scale-95"
+              >
+                <Award className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Switch to {role === 'HR' || role === 'Admin' ? 'Manager' : 'HR'}</span>
+              </button>
+            )}
 
             {/* User Profile Dropdown */}
             <div className="relative pl-3 border-l border-slate-200" ref={profileMenuRef}>

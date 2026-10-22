@@ -78,6 +78,54 @@ class Config:
     AI_MODEL_PATH = os.getenv("AI_MODEL_PATH", os.path.join(BASE_DIR, "../ml/model.joblib"))
 
     # Supabase Configuration
-    SUPABASE_URL = os.getenv("SUPABASE_URL", os.getenv("VITE_SUPABASE_URL", "https://livemvqdyupoipuajury.supabase.co"))
-    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", os.getenv("VITE_SUPABASE_ANON_KEY", "sb_publishable_WrkMC4kfEAQC7dAfpmln-Q_CKfrm6_0"))
+    SUPABASE_URL = os.getenv(
+        "SUPABASE_URL",
+        "https://livemvqdyupoipuajury.supabase.co").rstrip("/")
+
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+
+    # Authoritative Server-Side Role Mapping & Multi-Role Permissions
+    # Maps cryptographically verified identities to organizational roles and portal privileges.
+    # NEVER permits role elevation based on unverified client state or user-editable emails.
+    TRUSTED_ROLE_MAPPINGS = {
+        "elamparuthikp@gmail.com": {
+            "default_role": "HR",
+            "allowed_roles": ["HR", "Manager"],
+            "username": "hr",
+            "name": "HR Director",
+            "department": "Human Resources",
+            "status": "Active",
+            "is_admin": True
+        },
+        "elamparuthikp777@gmail.com": {
+            "default_role": "Manager",
+            "allowed_roles": ["Manager"],
+            "username": "manager",
+            "name": "Engineering Manager",
+            "department": "Engineering",
+            "status": "Active",
+            "is_admin": False
+        }
+    }
+
+    # Dynamically include any extra admin emails configured in environment variables
+    _extra_admins = [e.strip().lower() for e in os.getenv("AUTHORIZED_ADMIN_EMAILS", "").split(",") if e.strip()]
+    for _ea in _extra_admins:
+        if _ea not in TRUSTED_ROLE_MAPPINGS:
+            TRUSTED_ROLE_MAPPINGS[_ea] = {
+                "default_role": "HR",
+                "allowed_roles": ["HR", "Manager"],
+                "username": _ea.split("@")[0],
+                "name": "Administrator",
+                "department": "Administration",
+                "status": "Active",
+                "is_admin": True
+            }
+
+    @classmethod
+    def get_trusted_mapping(cls, email):
+        """Returns the authoritative role configuration for a verified email, or None if standard employee."""
+        if not email or not isinstance(email, str):
+            return None
+        return cls.TRUSTED_ROLE_MAPPINGS.get(email.strip().lower())
 

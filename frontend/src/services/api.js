@@ -1,15 +1,58 @@
 import axios from 'axios';
-import { supabase } from '../utils/supabaseClient';
+import { supabase, KNOWN_SUPABASE_ANON_KEY } from '../utils/supabaseClient';
 
-let rawApiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').trim();
-if (rawApiUrl.includes('enterprise-succession-dashboard.onrender.com')) {
-  rawApiUrl = rawApiUrl.replace('enterprise-succession-dashboard.onrender.com', 'enterprise-succession-planning-dashboard.onrender.com');
+const PRODUCTION_API_URL = 'https://enterprise-succession-planning-dashboard.onrender.com/api';
+const LOCAL_DEV_API_URL = 'http://localhost:5000/api';
+
+const isBrowser = typeof window !== 'undefined';
+const isLocalhostHost = isBrowser && (
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1' ||
+  window.location.hostname === '0.0.0.0'
+);
+
+const isDev = Boolean(import.meta.env.DEV || import.meta.env.MODE === 'development');
+
+/**
+ * Resolves the backend API base URL with full environment safety:
+ * 1. On remote/deployed client hosts (e.g. *.vercel.app), NEVER use localhost.
+ *    If VITE_API_URL is missing or incorrectly set to localhost, fallback to PRODUCTION_API_URL.
+ * 2. If VITE_API_URL is explicitly set and valid, use it (sanitizing legacy domain names).
+ * 3. In local development on a local machine, default to LOCAL_DEV_API_URL.
+ * 4. In all production builds, default to PRODUCTION_API_URL.
+ */
+function resolveApiBaseUrl() {
+  const envUrl = (import.meta.env.VITE_API_URL || '').trim();
+
+  // 1. If running in a browser on a deployed host (e.g. Vercel production):
+  if (isBrowser && !isLocalhostHost) {
+    if (!envUrl || envUrl.includes('localhost') || envUrl.includes('127.0.0.1')) {
+      return PRODUCTION_API_URL;
+    }
+  }
+
+  // 2. If VITE_API_URL is explicitly provided:
+  if (envUrl) {
+    let clean = envUrl;
+    if (clean.includes('enterprise-succession-dashboard.onrender.com')) {
+      clean = clean.replace('enterprise-succession-dashboard.onrender.com', 'enterprise-succession-planning-dashboard.onrender.com');
+    }
+    return clean.endsWith('/api') ? clean : `${clean.replace(/\/+$/, '')}/api`;
+  }
+
+  // 3. Local dev fallback only when running on localhost:
+  if (isDev && (!isBrowser || isLocalhostHost)) {
+    return LOCAL_DEV_API_URL;
+  }
+
+  // 4. Default production fallback (never localhost):
+  return PRODUCTION_API_URL;
 }
 
-const API_BASE_URL = rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl.replace(/\/+$/, '')}/api`;
+const API_BASE_URL = resolveApiBaseUrl();
 
 if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'development')) {
-  console.log(`[API Service] Base URL: ${API_BASE_URL}`);
+  console.log(`[API Service] Active Base URL: ${API_BASE_URL}`);
 }
 
 const api = axios.create({
@@ -17,7 +60,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 15000,
+  timeout: 45000, // 45 seconds to accommodate Render free-tier spin-up
 });
 
 api.interceptors.request.use(
@@ -42,7 +85,8 @@ api.interceptors.response.use(
     const errCode = error.code || 'UNKNOWN_CODE';
     const errMessage = error.message || 'Unknown network error';
 
-    console.error(`[API Error Diagnostic] Status: ${status} | Code: ${errCode} | Message: ${errMessage} | Details: ${responseData || 'N/A'} | Target: ${API_BASE_URL}${error.config?.url || ''}`);
+    // Log diagnostic without exposing sensitive authorization or token headers
+    console.error(`[API Error Diagnostic] Status: ${status} | Code: ${errCode} | Target: ${API_BASE_URL}${error.config?.url || ''}`);
 
     if (error.response) {
       if (error.response.status === 401) {
@@ -58,8 +102,17 @@ api.interceptors.response.use(
       return Promise.reject(customErr);
     }
 
+    // Explicit timeout handling (especially helpful for Render free-tier cold starts)
+    if (errCode === 'ECONNABORTED' || (errMessage && errMessage.toLowerCase().includes('timeout'))) {
+      return Promise.reject(new Error(
+        `API server request timed out after 45 seconds while communicating with ${API_BASE_URL}. The backend service may be waking up from a sleeping state (Render free tier). Please wait 30 seconds and refresh.`
+      ));
+    }
+
     if (error.code === 'ERR_NETWORK' || !error.response) {
-      return Promise.reject(new Error(`Unable to communicate with API server at ${API_BASE_URL}. Please check internet connection or verify backend service health.`));
+      return Promise.reject(new Error(
+        `Unable to communicate with API server at ${API_BASE_URL}. Please check your internet connection or verify that the backend service is healthy.`
+      ));
     }
 
     return Promise.reject(new Error(errMessage));
@@ -70,7 +123,7 @@ export const authService = {
   login: (credentials) => api.post('/login', credentials),
   loginSupabase: (accessToken, metadata = {}) => api.post('/supabase', { 
     access_token: accessToken,
-    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY || KNOWN_SUPABASE_ANON_KEY || '',
     user_metadata: metadata
   }),
   onboardEmployee: (data) => api.post('/onboard-employee', data),
@@ -127,6 +180,7 @@ export const authService = {
 
 export const employeeService = {
   getAll: (params, config = {}) => api.get('/employees', { params, ...config }),
+  getDirectory: (params) => api.get('/employees/directory', { params }),
   getById: (id, roleId = 1, config = {}) => api.get(`/employees/${id}`, { params: { role_id: roleId }, ...config }),
   create: (data) => api.post('/employees', data),
   update: (id, data) => api.put(`/employees/${id}`, data),
@@ -153,6 +207,12 @@ export const employeeService = {
   updateSkill: (empId, skillId, data) => api.put(`/employees/${empId}/skills/${skillId}`, data),
   deleteSkill: (empId, skillId) => api.delete(`/employees/${empId}/skills/${skillId}`),
   verifySkill: (empId, skillId, data) => api.post(`/employees/${empId}/skills/${skillId}/verify`, data),
+
+  // Summary APIs
+  getProjectsSummary: (empId) => api.get(`/employees/${empId}/projects-summary`),
+  getExperienceSummary: (empId) => api.get(`/employees/${empId}/experience-summary`),
+  getRoleSkillsSummary: (empId, roleId = 1) => api.get(`/employees/${empId}/roles/${roleId}/skills-summary`),
+  getRoleAssessmentSummary: (empId, roleId = 1) => api.get(`/employees/${empId}/roles/${roleId}/assessment-summary`),
 };
 
 export const roleService = {
@@ -169,8 +229,18 @@ export const roleService = {
   addRequiredSkill: (roleId, data) => api.post(`/roles/${roleId}/required-skills`, data),
   deleteRequiredSkill: (roleId, skillId) => api.delete(`/roles/${roleId}/required-skills/${skillId}`),
 
-  // Module 4: HR Candidate Comparison
+  // Module 4: HR Candidate Comparison & Summaries
   getCandidatesComparison: (roleId, params) => api.get(`/roles/${roleId}/candidates-comparison`, { params }),
+  getCandidateDossier: (roleId, empId) => api.get(`/roles/${roleId}/candidates/${empId}/dossier`),
+  getAssessmentScores: (roleId) => api.get(`/roles/${roleId}/assessment-scores`),
+  getProjectsSummary: (roleId) => api.get(`/roles/${roleId}/projects-summary`),
+  getSkillsSummary: (roleId) => api.get(`/roles/${roleId}/skills-summary`),
+  getExperienceSummary: (roleId) => api.get(`/roles/${roleId}/experience-summary`),
+
+  // Pre-Assessment Eligibility Filtering & Config
+  getEligibilityConfig: (roleId) => api.get(`/roles/${roleId}/eligibility-config`),
+  updateEligibilityConfig: (roleId, data) => api.put(`/roles/${roleId}/eligibility-config`, data),
+  getPreAssessmentCandidates: (roleId) => api.get(`/roles/${roleId}/pre-assessment-candidates`),
 };
 
 export const suitabilityService = {
@@ -280,4 +350,48 @@ export const questionBankService = {
   createAssessment: (data) => api.post('/question-bank/create-assessment', data),
 };
 
+export const hierarchyService = {
+  getHierarchy: () => api.get('/hierarchy'),
+  getManagerHierarchy: () => api.get('/manager/hierarchy'),
+  transfer: (payload) => api.post('/hierarchy/transfer', payload),
+  getUnassigned: () => api.get('/employees/unassigned'),
+};
+
+export const vacancyService = {
+  create: (data) => api.post('/vacancies', data),
+  getAll: (params) => api.get('/vacancies', { params }),
+  getById: (id) => api.get(`/vacancies/${id}`),
+  getCandidates: (id) => api.get(`/vacancies/${id}/candidates`),
+  getRecommendations: (id) => api.get(`/vacancies/${id}/recommendations`),
+  recordAction: (id, data) => api.post(`/vacancies/${id}/action`, data),
+  appoint: (id, data) => api.post(`/vacancies/${id}/appoint`, data),
+  getScoringConfig: () => api.get('/vacancies/scoring-config'),
+  updateScoringConfig: (data) => api.put('/vacancies/scoring-config', data),
+};
+
+export const managerService = {
+  getOverview: (params) => api.get('/manager/overview', { params }),
+  getTeam: (params) => api.get('/manager/team', { params }),
+  getTeamMember: (empId) => api.get(`/manager/team/${empId}`),
+  updateTeamMember: (empId, data) => api.put(`/manager/team/${empId}`, data),
+  getTasks: (params) => api.get('/manager/tasks', { params }),
+  createTask: (data) => api.post('/manager/tasks', data),
+  updateTask: (id, data) => api.put(`/manager/tasks/${id}`, data),
+  deleteTask: (id) => api.delete(`/manager/tasks/${id}`),
+  getGoals: () => api.get('/manager/goals'),
+  createGoal: (data) => api.post('/manager/goals', data),
+  updateGoal: (id, data) => api.put(`/manager/goals/${id}`, data),
+  deleteGoal: (id) => api.delete(`/manager/goals/${id}`),
+  getIssues: () => api.get('/manager/issues'),
+  createIssue: (data) => api.post('/manager/issues', data),
+  updateIssue: (id, data) => api.put(`/manager/issues/${id}`, data),
+  deleteIssue: (id) => api.delete(`/manager/issues/${id}`),
+  getFeedback: (params) => api.get('/manager/feedback', { params }),
+  createFeedback: (data) => api.post('/manager/feedback', data),
+  getRecommendations: () => api.get('/manager/recommendations'),
+  submitRecommendation: (data) => api.post('/manager/recommendations', data),
+  recordPerformanceReview: (data) => api.post('/manager/performance-reviews', data),
+};
+
 export default api;
+

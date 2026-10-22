@@ -32,6 +32,12 @@ class User(db.Model):
         # Never expose demo identities 'Sarah Jenkins' or 'Sneha Reddy' as a real user's name when linked to OAuth
         if stored_name and any(demo in stored_name.lower() for demo in ["sarah jenkins", "sneha reddy"]) and self.oauth_email:
             stored_name = None
+        from config import Config
+        trusted_mapping = Config.get_trusted_mapping(self.oauth_email or self.email)
+        allowed_roles = trusted_mapping["allowed_roles"] if trusted_mapping else ([self.role] if self.role else ["Employee"])
+        if self.role == 'Admin' and 'HR' not in allowed_roles:
+            allowed_roles = ['HR', 'Manager', 'Admin']
+
         return {
             "id": self.id,
             "name": stored_name,          # None means "no name stored" — frontend should use email
@@ -39,6 +45,8 @@ class User(db.Model):
             "email": self.email,
             "oauth_email": self.oauth_email,
             "role": self.role,
+            "allowed_roles": allowed_roles,
+            "is_multi_role": len(allowed_roles) > 1,
             "status": self.status,
             "employee_id": emp.id if emp else None,
             "employee_code": emp.employee_code if emp else None,

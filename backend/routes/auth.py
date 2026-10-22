@@ -16,6 +16,51 @@ auth_bp = Blueprint('auth', __name__)
 
 AUTHORIZED_ADMIN_EMAILS = {"elamparuthikp@gmail.com"}
 
+def is_trusted_admin(user=None, email=None):
+    """
+    Returns True if user has administrative privileges via verified email mapping,
+    role assignment, or pre-configured administrator lists.
+    """
+    if user and user.role and user.role.lower() == 'admin':
+        return True
+    emails_to_check = set()
+    if email:
+        emails_to_check.add(str(email).strip().lower())
+    if user:
+        if user.email:
+            emails_to_check.add(str(user.email).strip().lower())
+        if user.oauth_email:
+            emails_to_check.add(str(user.oauth_email).strip().lower())
+    for em in emails_to_check:
+        trusted = Config.get_trusted_mapping(em)
+        if trusted and (trusted.get('is_admin') or 'HR' in trusted.get('allowed_roles', [])):
+            return True
+        if em in AUTHORIZED_ADMIN_EMAILS:
+            return True
+    return False
+
+def get_allowed_roles_for_user(user=None, email=None):
+    """
+    Returns the authoritative list of roles this user is securely permitted to access.
+    """
+    emails_to_check = set()
+    if email:
+        emails_to_check.add(str(email).strip().lower())
+    if user:
+        if user.email:
+            emails_to_check.add(str(user.email).strip().lower())
+        if user.oauth_email:
+            emails_to_check.add(str(user.oauth_email).strip().lower())
+    for em in emails_to_check:
+        trusted = Config.get_trusted_mapping(em)
+        if trusted and 'allowed_roles' in trusted:
+            return list(trusted['allowed_roles'])
+    if user and user.role:
+        if user.role.lower() == 'admin':
+            return ['HR', 'Manager']
+        return [user.role]
+    return ['Employee']
+
 def validate_supabase_access_token(access_token, apikey=None, user_metadata=None):
     """
     Validates Supabase JWT against configured project endpoint.
@@ -139,6 +184,29 @@ def supabase_login():
                     emp.user_id = user.id
                     db.session.commit()
 
+        # Check if email belongs to authoritative trusted administrative/manager account
+        trusted_info = Config.get_trusted_mapping(email)
+        if not user and trusted_info:
+            # First-time login for pre-authorized trusted account - auto-provision Active user
+            username_candidate = re.sub(r'[^a-z0-9_.]', '', email.split('@')[0].lower()) or f"admin_{secrets.token_hex(4)}"
+            counter = 1
+            base_username = username_candidate
+            while User.query.filter(User.username == username_candidate).first():
+                username_candidate = f"{base_username}_{counter}"
+                counter += 1
+
+            user = User(
+                name=real_name or trusted_info.get("name") or username_candidate.title(),
+                username=username_candidate,
+                email=email,
+                oauth_email=email,
+                role=trusted_info['default_role'],
+                status='Active'
+            )
+            user.set_password(secrets.token_urlsafe(16))
+            db.session.add(user)
+            db.session.commit()
+
         if not user:
             return jsonify({
                 "success": False, 
@@ -147,7 +215,29 @@ def supabase_login():
                 "verified_name": real_name or None,
                 "message": "Your employee account is not registered. Please contact HR to request access."
             }), 404
-            
+
+        # Audit and correct trusted accounts that may have been saved with Pending status or incorrect role
+        if not trusted_info and user:
+            trusted_info = (
+                Config.get_trusted_mapping(user.email or '') or 
+                Config.get_trusted_mapping(user.oauth_email or '')
+            )
+
+        if trusted_info:
+            need_commit = False
+            if user.status != 'Active':
+                user.status = 'Active'
+                need_commit = True
+            allowed = trusted_info.get('allowed_roles', [trusted_info['default_role']])
+            if user.role not in allowed:
+                user.role = trusted_info['default_role']
+                need_commit = True
+            if not user.oauth_email or user.oauth_email.strip().lower() != email:
+                user.oauth_email = email
+                need_commit = True
+            if need_commit:
+                db.session.commit()
+
         if user.status == 'Pending':
             return jsonify({
                 "success": False,
@@ -158,16 +248,15 @@ def supabase_login():
         if user.status != 'Active':
             return jsonify({"success": False, "message": "Your enterprise account is deactivated. Contact HR admin."}), 403
 
-        # Prevent unauthorized role escalation via request body or query parameter
+        # Resolve authoritative allowed_roles for this user
+        allowed_roles = get_allowed_roles_for_user(user, email)
+
+        # Multi-role / requested role handling
         requested_role = (data.get('role', '') or request.args.get('role', '')).strip()
-        is_authorized_admin = (
-            (user.email and user.email.lower() in AUTHORIZED_ADMIN_EMAILS) or
-            (user.oauth_email and user.oauth_email.lower() in AUTHORIZED_ADMIN_EMAILS) or
-            user.role.lower() == 'admin'
-        )
-        if requested_role and requested_role.lower() != user.role.lower():
-            if is_authorized_admin and requested_role.upper() in ['HR', 'MANAGER']:
-                user.role = 'HR' if requested_role.upper() == 'HR' else 'Manager'
+        if requested_role and requested_role.upper() != user.role.upper():
+            norm_requested = 'HR' if requested_role.upper() == 'HR' else ('Manager' if requested_role.upper() == 'MANAGER' else ('Employee' if requested_role.upper() == 'EMPLOYEE' else requested_role))
+            if norm_requested in allowed_roles:
+                user.role = norm_requested
                 db.session.commit()
             else:
                 return jsonify({
@@ -194,6 +283,8 @@ def supabase_login():
         user_dict = user.to_dict()
         user_dict["email"] = email  # Verified email of the authenticated session
         user_dict["authenticated_email"] = email
+        user_dict["allowed_roles"] = allowed_roles
+        user_dict["is_multi_role"] = len(allowed_roles) > 1
         if real_name:
             user_dict["name"] = real_name
         elif user_dict.get("name") and any(demo in user_dict["name"].lower() for demo in ["sarah jenkins", "sneha reddy"]):
@@ -203,6 +294,8 @@ def supabase_login():
             "sub": str(user.id),
             "username": user.username,
             "role": user.role,
+            "allowed_roles": allowed_roles,
+            "is_multi_role": len(allowed_roles) > 1,
             "auth_email": email,
             "auth_name": user_dict.get("name"),
             "iat": datetime.now(timezone.utc),
@@ -247,16 +340,17 @@ def login():
             if not user.check_password(password):
                 return jsonify({"success": False, "message": "Invalid email/username or password"}), 401
 
-            is_authorized_admin = (
-                (user.email and user.email.lower() in AUTHORIZED_ADMIN_EMAILS) or
-                (user.oauth_email and user.oauth_email.lower() in AUTHORIZED_ADMIN_EMAILS) or
-                user.role.lower() == 'admin'
-            )
+            auth_email = user.email
+            if username_or_email == (user.oauth_email or '').lower():
+                auth_email = user.oauth_email
+
+            allowed_roles = get_allowed_roles_for_user(user, auth_email)
 
             # Prevent unauthorized role escalation via request body or query parameter
             if requested_role and requested_role.lower() != user.role.lower():
-                if is_authorized_admin and requested_role.upper() in ['HR', 'MANAGER']:
-                    user.role = 'HR' if requested_role.upper() == 'HR' else 'Manager'
+                norm_requested = 'HR' if requested_role.upper() == 'HR' else ('Manager' if requested_role.upper() == 'MANAGER' else ('Employee' if requested_role.upper() == 'EMPLOYEE' else requested_role))
+                if norm_requested in allowed_roles:
+                    user.role = norm_requested
                     db.session.commit()
                 else:
                     return jsonify({
@@ -264,11 +358,9 @@ def login():
                         "message": "Unauthorized role escalation: Your account is not authorized for the requested role."
                     }), 403
 
-            auth_email = user.email
-            if username_or_email == (user.oauth_email or '').lower():
-                auth_email = user.oauth_email
-
             user_dict = user.to_dict()
+            user_dict["allowed_roles"] = allowed_roles
+            user_dict["is_multi_role"] = len(allowed_roles) > 1
             if auth_email and auth_email != user_dict.get("email"):
                 user_dict["email"] = auth_email
                 user_dict["authenticated_email"] = auth_email
@@ -278,6 +370,8 @@ def login():
                 "sub": str(user.id),
                 "username": user.username,
                 "role": user.role,
+                "allowed_roles": allowed_roles,
+                "is_multi_role": len(allowed_roles) > 1,
                 "auth_email": auth_email,
                 "auth_name": user_dict.get("name"),
                 "iat": datetime.now(timezone.utc),
@@ -313,29 +407,27 @@ def switch_role():
 
     target_role_normalized = 'HR' if target_role.upper() == 'HR' else 'Manager'
 
-    is_authorized_admin = (
-        (user.email and user.email.lower() in AUTHORIZED_ADMIN_EMAILS) or
-        (user.oauth_email and user.oauth_email.lower() in AUTHORIZED_ADMIN_EMAILS) or
-        user.role.lower() == 'admin'
-    )
+    current_auth_email = getattr(request, 'auth_email', None) or user.oauth_email or user.email
+    allowed_roles = get_allowed_roles_for_user(user, current_auth_email)
 
-    if not is_authorized_admin:
+    if target_role_normalized not in allowed_roles:
         return jsonify({
             "success": False,
-            "message": "Unauthorized role escalation: Role switching is restricted to authorized administrative accounts."
+            "message": f"Unauthorized role escalation: Your account is not authorized to switch to {target_role_normalized}."
         }), 403
 
     user.role = target_role_normalized
     db.session.commit()
 
-    current_auth_email = getattr(request, 'auth_email', None) or user.oauth_email
     current_auth_name = getattr(request, 'auth_name', None)
 
-    # Issue updated token with new role
+    # Issue updated token with new role and allowed_roles
     payload = {
         "sub": str(user.id),
         "username": user.username,
         "role": user.role,
+        "allowed_roles": allowed_roles,
+        "is_multi_role": len(allowed_roles) > 1,
         "auth_email": current_auth_email,
         "auth_name": current_auth_name,
         "iat": datetime.now(timezone.utc),
@@ -344,6 +436,8 @@ def switch_role():
     new_token = jwt.encode(payload, Config.JWT_SECRET_KEY, algorithm="HS256")
 
     user_dict = user.to_dict()
+    user_dict["allowed_roles"] = allowed_roles
+    user_dict["is_multi_role"] = len(allowed_roles) > 1
     if current_auth_email:
         user_dict["email"] = current_auth_email
         user_dict["authenticated_email"] = current_auth_email
@@ -384,6 +478,11 @@ def get_me():
         data["name"] = auth_name
     elif data.get("name") and any(demo in data["name"].lower() for demo in ["sarah jenkins", "sneha reddy"]):
         data["name"] = None
+
+    allowed_roles = get_allowed_roles_for_user(user, auth_email or user.oauth_email or user.email)
+    data["allowed_roles"] = allowed_roles
+    data["is_multi_role"] = len(allowed_roles) > 1
+
     if employee:
         data["employee_profile"] = employee.to_dict()
 
@@ -606,13 +705,17 @@ def onboard_employee():
     if not email:
         return jsonify({"success": False, "message": "No verified email associated with this token"}), 401
 
-    # 2. Prevent role tampering - self-registration is strictly Employee
+    # 2. Prevent role tampering - self-registration is strictly Employee unless pre-authorized
+    trusted_info = Config.get_trusted_mapping(email)
     client_role = data.get('role', '').strip()
-    if client_role and client_role.lower() != 'employee':
+    if client_role and client_role.lower() != 'employee' and not trusted_info:
         return jsonify({
             "success": False,
             "message": "Unauthorized role selection: Self-registration is strictly limited to Employee accounts."
         }), 403
+
+    assigned_role = trusted_info['default_role'] if trusted_info else 'Employee'
+    assigned_status = 'Active' if trusted_info else 'Pending'
 
     # 3. Check for duplicate account / existing registration
     existing_user = User.query.filter(
@@ -686,14 +789,14 @@ def onboard_employee():
         username_candidate = f"{base_username}_{counter}"
         counter += 1
 
-    # 5. Create new User with role='Employee', status='Pending'
+    # 5. Create new User with assigned role and status
     new_user = User(
         name=name,
         username=username_candidate,
         email=email,
         oauth_email=email,
-        role='Employee',
-        status='Pending'
+        role=assigned_role,
+        status=assigned_status
     )
     new_user.set_password(secrets.token_urlsafe(16))
     db.session.add(new_user)
@@ -735,14 +838,19 @@ def onboard_employee():
 
     db.session.commit()
 
+    msg = (
+        f"Registration verified and activated successfully as {assigned_role}."
+        if assigned_status == 'Active'
+        else "Registration submitted successfully. Your employee account is pending HR approval before you can access the dashboard."
+    )
     return jsonify({
         "success": True,
-        "status": "Pending",
+        "status": assigned_status,
         "data": {
             "user": new_user.to_dict(),
             "employee": emp_record.to_dict()
         },
-        "message": "Registration submitted successfully. Your employee account is pending HR approval before you can access the dashboard."
+        "message": msg
     }), 201
 
 @auth_bp.route('/user-accounts/pending', methods=['GET'])

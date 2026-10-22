@@ -56,6 +56,8 @@ def get_current_user():
         # Attach verified authenticated session claims to request context
         request.auth_email = payload.get("auth_email")
         request.auth_name = payload.get("auth_name")
+        request.allowed_roles = payload.get("allowed_roles", [])
+        request.is_multi_role = payload.get("is_multi_role", False)
 
         return user, employee, None, 200
 

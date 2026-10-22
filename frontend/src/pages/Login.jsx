@@ -250,6 +250,9 @@ export const Login = () => {
     hasExchangedRef.current = false;
     try {
       const redirectUrl = getOAuthRedirectUrl();
+      if (!redirectUrl) {
+        throw new Error('Authentication redirect URL could not be resolved.');
+      }
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
