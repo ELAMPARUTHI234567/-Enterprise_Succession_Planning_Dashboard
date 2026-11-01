@@ -157,7 +157,12 @@ export const Login = () => {
           const verifiedEmail = respData.verified_email || session?.user?.email || '';
           const verifiedName = respData.verified_name || session?.user?.user_metadata?.full_name || session?.user?.user_metadata?.name || '';
           
-          setOnboardToken(session.access_token);
+          // Strictly ensure Supabase access_token is captured (never Google's provider_token)
+          const validSupabaseToken = (session?.access_token && !session.access_token.startsWith('ya29.'))
+            ? session.access_token
+            : '';
+          
+          setOnboardToken(validSupabaseToken);
           setOnboardData({
             email: verifiedEmail,
             name: verifiedName,
@@ -168,18 +173,21 @@ export const Login = () => {
           setOnboardError('');
           setShowOnboardModal(true);
           setError('');
+          // Do NOT reset hasExchangedRef or sign out while user is actively onboarding
         } else if (statusCode === 403 && (respData.status === 'Pending' || cleanMsg.toLowerCase().includes('pending hr approval'))) {
           setPendingEmail(session?.user?.email || respData.verified_email || '');
           setShowPendingModal(true);
           await supabase?.auth?.signOut();
+          hasExchangedRef.current = false;
         } else if (cleanMsg.toLowerCase().includes('deactivated')) {
           setError('Your enterprise account is deactivated. Contact HR admin.');
           await supabase?.auth?.signOut();
+          hasExchangedRef.current = false;
         } else {
           setError(cleanMsg || 'Google authentication exchange failed. Please try again.');
           await supabase?.auth?.signOut();
+          hasExchangedRef.current = false;
         }
-        hasExchangedRef.current = false;
       } finally {
         setGoogleLoading(false);
       }
@@ -357,9 +365,24 @@ export const Login = () => {
     setOnboardLoading(true);
 
     try {
+      // Ensure we have a valid Supabase access_token (never Google provider_token)
+      let tokenToSend = onboardToken;
+      if (!tokenToSend || tokenToSend.startsWith('ya29.') || tokenToSend.split('.').length !== 3) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData?.session?.access_token && !sessionData.session.access_token.startsWith('ya29.')) {
+          tokenToSend = sessionData.session.access_token;
+        }
+      }
+
+      if (!tokenToSend || tokenToSend.startsWith('ya29.') || tokenToSend.split('.').length !== 3) {
+        setOnboardError('Your authentication session has expired. Please sign in with Google again.');
+        setOnboardLoading(false);
+        return;
+      }
+
       const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || KNOWN_SUPABASE_ANON_KEY || '';
       const res = await authService.onboardEmployee({
-        access_token: onboardToken,
+        access_token: tokenToSend,
         apikey: anonKey,
         name: onboardData.name.trim(),
         department: onboardData.department.trim(),
@@ -395,6 +418,7 @@ export const Login = () => {
     setShowOnboardModal(false);
     setOnboardToken('');
     setOnboardError('');
+    hasExchangedRef.current = false;
     await supabase?.auth?.signOut();
   };
 

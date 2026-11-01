@@ -171,5 +171,78 @@ class TestSupabaseRegistrationApiKey(unittest.TestCase):
             updated = User.query.get(user_id)
             self.assertEqual(updated.status, 'Active')
 
+    def test_06_google_provider_token_rejected_cleanly(self):
+        """Verify that sending a Google provider_token (starting with ya29.) returns 400 error."""
+        res = self.client.post('/api/onboard-employee', json={
+            "access_token": "ya29.a0AfH6SMB_fake_google_provider_token_12345",
+            "name": "Provider Token User"
+        })
+        self.assertEqual(res.status_code, 400)
+        data = res.get_json()
+        self.assertFalse(data['success'])
+        self.assertIn("Google provider_token instead of Supabase session.access_token", data['message'])
+
+    def test_07_asymmetric_es256_jwks_signature_verification(self):
+        """Verify that an ES256 token signed by an EC key can be verified cryptographically."""
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from routes.auth import validate_supabase_access_token
+
+        priv_key = ec.generate_private_key(ec.SECP256R1())
+        pub_key = priv_key.public_key()
+        kid = "test-ec-kid"
+
+        supabase_url = getattr(Config, 'SUPABASE_URL', 'https://livemvqdyupoipuajury.supabase.co').rstrip('/')
+        token = jwt.encode({
+            "iss": f"{supabase_url}/auth/v1",
+            "aud": "authenticated",
+            "sub": "test-uuid-es256",
+            "email": "es256.candidate@example.com",
+            "exp": 9999999999,
+            "user_metadata": {"full_name": "ES256 Candidate"}
+        }, priv_key, algorithm="ES256", headers={"kid": kid})
+
+        # Mock PyJWKClient to return pub_key
+        mock_jwk = MagicMock()
+        mock_jwk.key = pub_key
+        mock_client = MagicMock()
+        mock_client.get_signing_key_from_jwt.return_value = mock_jwk
+
+        mock_resp = self._mock_supabase_response("es256.candidate@example.com", name="ES256 Candidate")
+
+        with patch('routes.auth.get_jwks_client', return_value=mock_client):
+            with patch('urllib.request.urlopen', return_value=mock_resp):
+                email, real_name, err = validate_supabase_access_token(token)
+                self.assertIsNone(err)
+                self.assertEqual(email, "es256.candidate@example.com")
+                self.assertEqual(real_name, "ES256 Candidate")
+
+    def test_08_expired_token_rejected(self):
+        """Verify that an expired token is rejected with 401."""
+        from routes.auth import validate_supabase_access_token
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        priv_key = ec.generate_private_key(ec.SECP256R1())
+        pub_key = priv_key.public_key()
+        supabase_url = getattr(Config, 'SUPABASE_URL', 'https://livemvqdyupoipuajury.supabase.co').rstrip('/')
+
+        expired_token = jwt.encode({
+            "iss": f"{supabase_url}/auth/v1",
+            "aud": "authenticated",
+            "sub": "test-uuid-expired",
+            "email": "expired@example.com",
+            "exp": 1000000000  # Year 2001
+        }, priv_key, algorithm="ES256", headers={"kid": "test-kid"})
+
+        mock_jwk = MagicMock()
+        mock_jwk.key = pub_key
+        mock_client = MagicMock()
+        mock_client.get_signing_key_from_jwt.return_value = mock_jwk
+
+        with patch('routes.auth.get_jwks_client', return_value=mock_client):
+            email, real_name, err = validate_supabase_access_token(expired_token)
+            self.assertIsNotNone(err)
+            self.assertEqual(err[1], 401)
+            self.assertIn("expired", err[0]["message"].lower())
+
 if __name__ == '__main__':
     unittest.main()
