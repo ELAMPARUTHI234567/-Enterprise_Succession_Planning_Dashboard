@@ -168,7 +168,7 @@ def workforce_summary_route():
     GET /api/ai/workforce-summary
     Module 1: HR Executive Workforce & Succession Summary
     """
-    user, employee, err_msg, status = require_role('HR', 'Admin')
+    user, employee, err_msg, status = require_role('HR', 'Admin', 'Manager')
     if err_msg:
         return jsonify({"success": False, "message": err_msg}), status
 

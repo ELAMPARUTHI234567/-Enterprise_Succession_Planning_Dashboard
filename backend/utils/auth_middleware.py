@@ -90,7 +90,12 @@ def require_role(*allowed_roles):
         return None, None, err_msg, status
 
     normalized_allowed = [r.lower() for r in allowed_roles]
-    if user.role.lower() not in normalized_allowed and 'admin' not in user.role.lower():
+    user_roles = [user.role.lower()]
+    for r in getattr(request, 'allowed_roles', []):
+        if r and r.lower() not in user_roles:
+            user_roles.append(r.lower())
+
+    if not any(r in normalized_allowed for r in user_roles) and 'admin' not in user_roles:
         return None, None, f"Access forbidden: User role '{user.role}' is not authorized for this resource.", 403
 
     return user, employee, None, 200
