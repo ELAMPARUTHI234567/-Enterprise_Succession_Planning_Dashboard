@@ -15,6 +15,7 @@ export const MainLayout = ({ children }) => {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isSwitchingRole, setIsSwitchingRole] = useState(false);
   const profileMenuRef = useRef(null);
   const notifRef = useRef(null);
   const navigate = useNavigate();
@@ -31,6 +32,21 @@ export const MainLayout = ({ children }) => {
   });
 
   useEffect(() => {
+    const handleRoleChanged = (e) => {
+      if (e?.detail) {
+        setUser(e.detail);
+      } else {
+        try {
+          const u = localStorage.getItem('succession_user');
+          if (u) setUser(JSON.parse(u));
+        } catch {}
+      }
+    };
+    window.addEventListener('auth_role_changed', handleRoleChanged);
+    return () => window.removeEventListener('auth_role_changed', handleRoleChanged);
+  }, []);
+
+  useEffect(() => {
     const token = localStorage.getItem('succession_token');
     if (!token) return;
 
@@ -44,7 +60,7 @@ export const MainLayout = ({ children }) => {
       })
       .catch((err) => {
         const msg = (err?.message || '').toLowerCase();
-        if (msg.includes('401') || msg.includes('403') || msg.includes('invalid') || msg.includes('expired')) {
+        if (msg.includes('401') && !msg.includes('role signature')) {
           localStorage.removeItem('succession_token');
           localStorage.removeItem('succession_user');
           navigate('/login', { replace: true });
@@ -186,34 +202,53 @@ export const MainLayout = ({ children }) => {
     }
   };
 
-  const userEmail = (user?.email || '').toLowerCase();
-  const oauthEmail = (user?.oauth_email || '').toLowerCase();
-  const authenticatedEmail = (user?.authenticated_email || '').toLowerCase();
-  const allowedRoles = Array.isArray(user?.allowed_roles) ? user.allowed_roles : [];
-  const isMultiRole = Boolean(user?.is_multi_role || allowedRoles.length > 1);
-  const isAuthorizedAdmin = isMultiRole || 
-                            (allowedRoles.includes('HR') && allowedRoles.includes('Manager')) ||
-                            userEmail === 'elamparuthikp@gmail.com' || 
-                            oauthEmail === 'elamparuthikp@gmail.com' || 
-                            authenticatedEmail === 'elamparuthikp@gmail.com' || 
-                            (user?.role || '').toLowerCase() === 'admin';
+  const allowedRoles = Array.isArray(user?.allowed_roles)
+    ? user.allowed_roles.map(r => String(r).toUpperCase())
+    : [];
+
+  const activeRole = (user?.role || 'Employee').toString();
+  const activeRoleUpper = activeRole.toUpperCase();
+  const isCurrentlyHR = activeRoleUpper === 'HR' || activeRoleUpper === 'ADMIN';
+
+  // Strict Single-Role Isolation:
+  // - HR-only users must not see "Switch to Manager"
+  // - Manager-only users must not see "Switch to HR"
+  // - Only users with BOTH HR and Manager permissions can switch both ways
+  const canSwitchRoles = allowedRoles.includes('HR') && allowedRoles.includes('MANAGER');
 
   const handleSwitchRole = async (targetRole) => {
+    if (isSwitchingRole) return;
+    setIsSwitchingRole(true);
     try {
       setProfileMenuOpen(false);
+      setSidebarOpen(false);
       const res = await authService.switchRole(targetRole);
       if (res && res.success && res.data) {
+        // Clear cached dashboard data to prevent stale cards and charts
+        try {
+          sessionStorage.removeItem('manager_overview');
+          sessionStorage.removeItem('manager_team');
+          sessionStorage.removeItem('hr_dashboard_summary');
+        } catch {}
+
         localStorage.setItem('succession_token', res.data.token);
         localStorage.setItem('succession_user', JSON.stringify(res.data.user));
         setUser(res.data.user);
-        if (targetRole.toLowerCase() === 'hr') {
-          navigate('/dashboard');
-        } else {
-          navigate('/manager-dashboard');
-        }
+
+        // Notify all app components about the role switch
+        window.dispatchEvent(new CustomEvent('auth_role_changed', { detail: res.data.user }));
+
+        const targetPath = targetRole.toUpperCase() === 'HR' ? '/dashboard' : '/manager-dashboard';
+        navigate(targetPath, { replace: true });
+      } else {
+        alert(res?.message || 'Failed to switch role.');
       }
     } catch (err) {
       console.error('Failed to switch role:', err);
+      const msg = err?.response?.data?.message || err?.message || 'Error switching role. Please try again.';
+      alert(msg);
+    } finally {
+      setIsSwitchingRole(false);
     }
   };
 
@@ -318,6 +353,22 @@ export const MainLayout = ({ children }) => {
               </div>
             </div>
           </div>
+
+          {/* Quick Switch Button in Sidebar for authorized multi-role users */}
+          {canSwitchRoles && (
+            <div className="px-3 pb-2">
+              <button
+                type="button"
+                id="sidebar-switch-role-btn"
+                onClick={() => handleSwitchRole(isCurrentlyHR ? 'Manager' : 'HR')}
+                disabled={isSwitchingRole}
+                className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-xl text-xs font-bold bg-indigo-900/70 text-indigo-200 border border-indigo-700/70 hover:bg-indigo-800 hover:text-white transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
+              >
+                <Award className="w-3.5 h-3.5 text-amber-300" />
+                <span>{isSwitchingRole ? 'Switching...' : `Switch to ${isCurrentlyHR ? 'Manager' : 'HR'}`}</span>
+              </button>
+            </div>
+          )}
 
           {/* Navigation Links */}
           <nav className="p-3 space-y-1 overflow-y-auto max-h-[calc(100vh-250px)] scrollbar-thin">
@@ -454,17 +505,18 @@ export const MainLayout = ({ children }) => {
               )}
             </div>
 
-            {/* Quick Multi-Role Switch Button */}
-            {isAuthorizedAdmin && (
+            {/* Quick Multi-Role Switch Button in Header */}
+            {canSwitchRoles && (
               <button
                 type="button"
                 id="header-quick-switch-portal-btn"
-                onClick={() => handleSwitchRole(role === 'HR' || role === 'Admin' ? 'Manager' : 'HR')}
-                title={`Switch to ${role === 'HR' || role === 'Admin' ? 'Manager' : 'HR'} Portal`}
-                className="hidden md:inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200/80 hover:bg-indigo-100 hover:border-indigo-300 transition-all cursor-pointer shadow-sm active:scale-95"
+                onClick={() => handleSwitchRole(isCurrentlyHR ? 'Manager' : 'HR')}
+                disabled={isSwitchingRole}
+                title={`Switch to ${isCurrentlyHR ? 'Manager' : 'HR'} Portal`}
+                className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200/80 hover:bg-indigo-100 hover:border-indigo-300 transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
               >
                 <Award className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Switch to {role === 'HR' || role === 'Admin' ? 'Manager' : 'HR'}</span>
+                <span>{isSwitchingRole ? 'Switching...' : `Switch to ${isCurrentlyHR ? 'Manager' : 'HR'}`}</span>
               </button>
             )}
 
@@ -545,17 +597,18 @@ export const MainLayout = ({ children }) => {
                   </div>
 
                   {/* Authorized Role Switch for Multi-Role Admins */}
-                  {isAuthorizedAdmin && (
+                  {canSwitchRoles && (
                     <div className="pt-1.5 mt-1 border-t border-slate-100 px-1.5">
                       <button
                         type="button"
                         id="header-switch-role-btn"
-                        onClick={() => handleSwitchRole(role === 'HR' || role === 'Admin' ? 'Manager' : 'HR')}
-                        className="w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                        onClick={() => handleSwitchRole(isCurrentlyHR ? 'Manager' : 'HR')}
+                        disabled={isSwitchingRole}
+                        className="w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer disabled:opacity-50"
                         role="menuitem"
                       >
                         <Award className="w-4 h-4 text-indigo-500" />
-                        <span>Switch to {role === 'HR' || role === 'Admin' ? 'Manager' : 'HR'} Portal</span>
+                        <span>{isSwitchingRole ? 'Switching...' : `Switch to ${isCurrentlyHR ? 'Manager' : 'HR'} Portal`}</span>
                       </button>
                     </div>
                   )}

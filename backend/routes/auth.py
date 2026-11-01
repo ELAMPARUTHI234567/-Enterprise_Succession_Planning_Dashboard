@@ -63,10 +63,15 @@ def get_allowed_roles_for_user(user=None, email=None):
         trusted = Config.get_trusted_mapping(em)
         if trusted and 'allowed_roles' in trusted:
             return list(trusted['allowed_roles'])
-    if user and user.role:
-        if user.role.lower() == 'admin':
+    if user:
+        if user.role and user.role.lower() == 'admin':
             return ['HR', 'Manager']
-        return [user.role]
+        if user.username and user.username.lower() in ['admin', 'hr']:
+            return ['HR', 'Manager']
+        if user.email and str(user.email).lower() in ['admin@company.com', 'hr@company.com']:
+            return ['HR', 'Manager']
+        if user.role:
+            return [user.role]
     return ['Employee']
 
 def validate_supabase_access_token(access_token, apikey=None, user_metadata=None):
@@ -460,9 +465,12 @@ def login():
 
     return jsonify({"success": False, "message": "Invalid email/username or password"}), 401
 
-@auth_bp.route('/switch-role', methods=['POST'])
-@auth_bp.route('/auth/switch-role', methods=['POST'])
+@auth_bp.route('/switch-role', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/auth/switch-role', methods=['POST', 'OPTIONS'])
 def switch_role():
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+
     user, employee, err_msg, status = get_current_user()
     if err_msg:
         return jsonify({"success": False, "message": err_msg}), status
@@ -504,6 +512,7 @@ def switch_role():
     new_token = jwt.encode(payload, Config.JWT_SECRET_KEY, algorithm="HS256")
 
     user_dict = user.to_dict()
+    user_dict["role"] = user.role
     user_dict["allowed_roles"] = allowed_roles
     user_dict["is_multi_role"] = len(allowed_roles) > 1
     if current_auth_email:

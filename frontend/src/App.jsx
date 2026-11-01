@@ -35,16 +35,27 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     return <Navigate to="/login" replace />;
   }
 
-  const userRole = user?.role || 'Employee';
+  const activeRoleUpper = (user?.role || 'Employee').toString().toUpperCase();
+  const userAllowedRoles = Array.isArray(user?.allowed_roles)
+    ? user.allowed_roles.map(r => String(r).toUpperCase())
+    : [activeRoleUpper];
 
-  if (allowedRoles && !allowedRoles.includes(userRole)) {
-    // Redirect based on role if trying to access unauthorized URL
-    if (userRole === 'Employee') {
-      return <Navigate to="/employee-dashboard" replace />;
-    } else if (userRole === 'Manager') {
-      return <Navigate to="/manager-dashboard" replace />;
-    } else {
-      return <Navigate to="/dashboard" replace />;
+  if (allowedRoles && allowedRoles.length > 0) {
+    const requiredRolesUpper = allowedRoles.map(r => String(r).toUpperCase());
+
+    // Check if active role or authorized allowed_roles has permission for this route
+    const hasActivePermission = requiredRolesUpper.includes(activeRoleUpper);
+    const hasAllowedPermission = (activeRoleUpper === 'ADMIN' || user?.is_multi_role) &&
+      userAllowedRoles.some(r => requiredRolesUpper.includes(r));
+
+    if (!hasActivePermission && !hasAllowedPermission) {
+      if (activeRoleUpper === 'EMPLOYEE') {
+        return <Navigate to="/employee-dashboard" replace />;
+      } else if (activeRoleUpper === 'MANAGER') {
+        return <Navigate to="/manager-dashboard" replace />;
+      } else {
+        return <Navigate to="/dashboard" replace />;
+      }
     }
   }
 

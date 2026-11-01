@@ -106,6 +106,24 @@ class Config:
     # Maps cryptographically verified identities to organizational roles and portal privileges.
     # NEVER permits role elevation based on unverified client state or user-editable emails.
     TRUSTED_ROLE_MAPPINGS = {
+        "hr@company.com": {
+            "default_role": "HR",
+            "allowed_roles": ["HR", "Manager"],
+            "username": "hr",
+            "name": "HR Director",
+            "department": "Human Resources",
+            "status": "Active",
+            "is_admin": True
+        },
+        "admin@company.com": {
+            "default_role": "HR",
+            "allowed_roles": ["HR", "Manager"],
+            "username": "admin",
+            "name": "System Administrator",
+            "department": "Administration",
+            "status": "Active",
+            "is_admin": True
+        },
         "elamparuthikp@gmail.com": {
             "default_role": "HR",
             "allowed_roles": ["HR", "Manager"],

@@ -40,8 +40,14 @@ def get_current_user():
             return None, None, "User account not found or deactivated", 401
 
         user_role_lower = user.role.lower()
+        token_allowed_roles = [str(r).lower() for r in payload.get("allowed_roles", [])]
         if token_role != user_role_lower:
-            if not (token_role in ['hr', 'admin'] and user_role_lower in ['hr', 'admin']):
+            is_valid_transition = (
+                (user_role_lower in token_allowed_roles) or
+                (token_role in ['hr', 'admin'] and user_role_lower in ['hr', 'admin']) or
+                (token_role in ['hr', 'manager'] and user_role_lower in ['hr', 'manager'] and (payload.get('is_multi_role') or ('hr' in token_allowed_roles and 'manager' in token_allowed_roles)))
+            )
+            if not is_valid_transition:
                 return None, None, "Invalid token role signature", 401
 
         if user.status != 'Active':
