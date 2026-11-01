@@ -59,6 +59,18 @@ export const Login = () => {
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [pendingEmail, setPendingEmail] = useState('');
 
+  // First-Login Password Change Modal State
+  const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
+  const [mustChangeUser, setMustChangeUser] = useState(null);
+  const [changePasswordForm, setChangePasswordForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+  });
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+  const [changePasswordError, setChangePasswordError] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+
   const navigate = useNavigate();
   const hasExchangedRef = useRef(false);
 
@@ -311,16 +323,19 @@ export const Login = () => {
           localStorage.removeItem('succession_remember_user');
         }
 
-        const userRole = (userData.role || '').toString().toLowerCase();
-
-        // Redirect based on authoritative backend database role
-        if (userRole === 'hr' || userRole === 'admin') {
-          navigate('/dashboard');
-        } else if (userRole === 'manager') {
-          navigate('/manager-dashboard');
-        } else {
-          navigate('/employee-dashboard');
+        // Handle first-login password change requirement
+        if (userData.must_change_password) {
+          setMustChangeUser(userData);
+          setChangePasswordForm({
+            currentPassword: password.trim(),
+            newPassword: '',
+            confirmPassword: ''
+          });
+          setShowPasswordChangeModal(true);
+          return;
         }
+
+        proceedToRoleDashboard(userData);
       } else {
         setError(res.message || 'Invalid email/username or password');
       }
@@ -337,6 +352,62 @@ export const Login = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const proceedToRoleDashboard = (userData) => {
+    const userRole = (userData?.role || '').toString().toLowerCase();
+    if (userRole === 'hr' || userRole === 'admin') {
+      navigate('/dashboard');
+    } else if (userRole === 'manager') {
+      navigate('/manager-dashboard');
+    } else {
+      navigate('/employee-dashboard');
+    }
+  };
+
+  const handlePasswordChangeSubmit = async (e) => {
+    e.preventDefault();
+    setChangePasswordError('');
+
+    if (!changePasswordForm.newPassword) {
+      setChangePasswordError('Please enter a new password.');
+      return;
+    }
+    if (changePasswordForm.newPassword.length < 6) {
+      setChangePasswordError('New password must be at least 6 characters long.');
+      return;
+    }
+    if (changePasswordForm.newPassword !== changePasswordForm.confirmPassword) {
+      setChangePasswordError('New password and confirmation do not match.');
+      return;
+    }
+
+    setChangePasswordLoading(true);
+    try {
+      const res = await authService.changePassword({
+        current_password: changePasswordForm.currentPassword || password.trim(),
+        new_password: changePasswordForm.newPassword
+      });
+
+      if (res?.success) {
+        const updatedUser = { ...(mustChangeUser || {}), must_change_password: false };
+        localStorage.setItem('succession_user', JSON.stringify(updatedUser));
+        setShowPasswordChangeModal(false);
+        proceedToRoleDashboard(updatedUser);
+      } else {
+        setChangePasswordError(res?.message || 'Failed to update password.');
+      }
+    } catch (err) {
+      const rawMsg = err.message || '';
+      setChangePasswordError(rawMsg.replace(/^\[HTTP \d+\]\s*/, '') || 'Failed to update password.');
+    } finally {
+      setChangePasswordLoading(false);
+    }
+  };
+
+  const handleSkipPasswordChange = () => {
+    setShowPasswordChangeModal(false);
+    proceedToRoleDashboard(mustChangeUser);
   };
 
   const handleForgotSubmit = (e) => {
@@ -896,6 +967,116 @@ export const Login = () => {
                 Return to Sign In
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* First-Login Password Change Modal */}
+      {showPasswordChangeModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-slate-100 space-y-5 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shadow-sm">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">First-Time Login Security</h3>
+                  <p className="text-xs text-slate-500">Update development testing password</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs text-indigo-900 space-y-1">
+              <div className="flex items-center space-x-1.5 font-bold">
+                <ShieldCheck className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+                <span>Account: {mustChangeUser?.email || username}</span>
+              </div>
+              <p className="text-indigo-800 leading-relaxed text-[11px]">
+                You have signed in with the default development password. Please choose a personal password to secure your Employee Portal.
+              </p>
+            </div>
+
+            {changePasswordError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start space-x-2">
+                <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0 mt-0.5" />
+                <span className="font-medium">{changePasswordError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handlePasswordChangeSubmit} className="space-y-4">
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-slate-700">Current Password</label>
+                <input
+                  type="password"
+                  value={changePasswordForm.currentPassword}
+                  onChange={(e) => setChangePasswordForm({ ...changePasswordForm, currentPassword: e.target.value })}
+                  placeholder="Enter current password (employee123)"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-700">New Password</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold"
+                  >
+                    {showNewPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+                <input
+                  type={showNewPassword ? 'text' : 'password'}
+                  required
+                  value={changePasswordForm.newPassword}
+                  onChange={(e) => setChangePasswordForm({ ...changePasswordForm, newPassword: e.target.value })}
+                  placeholder="Minimum 6 characters"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-slate-700">Confirm New Password</label>
+                <input
+                  type="password"
+                  required
+                  value={changePasswordForm.confirmPassword}
+                  onChange={(e) => setChangePasswordForm({ ...changePasswordForm, confirmPassword: e.target.value })}
+                  placeholder="Re-enter new password"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex items-center space-x-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleSkipPasswordChange}
+                  disabled={changePasswordLoading}
+                  className="flex-1 py-3 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 transition cursor-pointer"
+                >
+                  Skip for Now
+                </button>
+                <button
+                  type="submit"
+                  disabled={changePasswordLoading}
+                  className="flex-1 py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md shadow-indigo-600/20 flex items-center justify-center space-x-2 transition disabled:opacity-60 cursor-pointer"
+                >
+                  {changePasswordLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Updating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Set Password</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

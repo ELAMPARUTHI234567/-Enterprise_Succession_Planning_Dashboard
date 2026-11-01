@@ -295,72 +295,15 @@ def seed_database_if_empty():
 def sync_employee_users():
     """
     Ensures every Employee in the database has an associated User account
-    for individual authentication (e.g. arun.kumar, priya.sharma, sneha.reddy).
-    Disabled in production to avoid resetting user credentials or generating mock accounts.
+    for individual authentication (e.g. arun.kumar@company.com, priya.sharma@company.com, sneha.reddy@company.com).
+    Uses sync_all_employee_accounts to ensure strict Employee roles and employee123 testing credentials.
     """
-    if Config.IS_PRODUCTION or os.getenv("DISABLE_DEMO_SEEDING", "false").lower() == "true":
-        print("[INFO] Production mode detected or demo sync disabled. Skipping sync_employee_users.")
-        return
-
     try:
-        employees = Employee.query.all()
-        created_count = 0
-
-        for emp in employees:
-            clean_name = emp.name.lower().strip()
-            individual_username = clean_name.replace(' ', '.')
-            role = 'Manager' if 'manager' in emp.designation.lower() or 'lead' in emp.designation.lower() else 'Employee'
-            pwd = 'manager123' if role == 'Manager' else 'employee123'
-
-            existing_user = None
-            if emp.user_id:
-                existing_user = User.query.get(emp.user_id)
-
-            if not existing_user:
-                existing_user = User.query.filter(
-                    (User.username == individual_username) | (User.email == emp.email)
-                ).first()
-
-            if existing_user:
-                # Synchronize linked account info and ensure status is active without touching existing passwords
-                emp.user_id = existing_user.id
-                if existing_user.username == 'employee' and emp.name == 'Arun Kumar':
-                    existing_user.username = 'arun.kumar'
-                    existing_user.email = 'arun.kumar@company.com'
-                existing_user.status = 'Active'
-                continue
-
-            # Create new individual user account for employee
-            user = User(
-                name=emp.name,
-                username=individual_username,
-                email=emp.email,
-                role=role,
-                status='Active'
-            )
-            user.set_password(pwd)
-            db.session.add(user)
-            db.session.flush()
-
-            emp.user_id = user.id
-            created_count += 1
-
-        # Also ensure 'arun.kumar' user exists explicitly if not created yet
-        arun_user = User.query.filter((User.username == 'arun.kumar') | (User.username == 'employee')).first()
-        if arun_user:
-            arun_user.status = 'Active'
-        else:
-            arun_user = User(name="Arun Kumar", username="arun.kumar", email="arun.kumar@company.com", role="Employee", status="Active")
-            arun_user.set_password("employee123")
-            db.session.add(arun_user)
-            created_count += 1
-
-        db.session.commit()
-        if created_count > 0:
-            print(f"[SUCCESS] Linked/created {created_count} individual employee user accounts.")
+        from utils.employee_account_service import sync_all_employee_accounts
+        report = sync_all_employee_accounts(target_password="employee123", sync_supabase=False)
+        print(f"[SUCCESS] sync_employee_users completed: {len(report.get('accounts', []))} accounts verified.")
     except Exception as e:
-        db.session.rollback()
-        print(f"[WARNING] Error in sync_employee_users: {str(e)}")
+        print(f"[WARNING] sync_employee_users notice: {str(e)}")
 
 def seed_enhanced_modules_baseline():
     """

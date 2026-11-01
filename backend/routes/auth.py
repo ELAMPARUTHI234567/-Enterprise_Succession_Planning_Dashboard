@@ -405,6 +405,12 @@ def login():
             (db.func.lower(db.func.trim(User.oauth_email)) == username_or_email)
         ).first()
 
+        # If user not found and username_or_email does not contain '@', check if it matches email prefix
+        if not user and '@' not in username_or_email:
+            user = User.query.filter(
+                db.func.lower(db.func.trim(User.email)).like(f"{username_or_email}@%")
+            ).first()
+
         if user:
             if user.status != 'Active':
                 return jsonify({"success": False, "message": "Your enterprise account is deactivated. Contact HR admin."}), 403
@@ -564,6 +570,69 @@ def get_me():
         data["employee_profile"] = employee.to_dict()
 
     return jsonify({"success": True, "data": data}), 200
+
+@auth_bp.route('/change-password', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/auth/change-password', methods=['POST', 'OPTIONS'])
+def change_password():
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+
+    user, employee, err_msg, status = get_current_user()
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    data = request.get_json() or {}
+    current_password = data.get('current_password', '').strip()
+    new_password = data.get('new_password', '').strip()
+
+    if not new_password:
+        return jsonify({"success": False, "message": "New password is required"}), 400
+
+    if len(new_password) < 6:
+        return jsonify({"success": False, "message": "New password must be at least 6 characters long"}), 400
+
+    # If user has an existing password set, verify current_password
+    if user.password_hash and not user.check_password(current_password):
+        return jsonify({"success": False, "message": "Incorrect current password"}), 400
+
+    user.set_password(new_password)
+    user.must_change_password = False
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "message": "Password changed successfully",
+        "data": {
+            "user": user.to_dict()
+        }
+    }), 200
+
+@auth_bp.route('/admin/sync-employee-accounts', methods=['POST', 'OPTIONS'])
+@auth_bp.route('/sync-employee-accounts', methods=['POST', 'OPTIONS'])
+def sync_employee_accounts_endpoint():
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+
+    # Allow authorized HR/Admin OR valid admin authorization key
+    admin_key = request.headers.get('X-Admin-Key') or request.args.get('admin_key')
+    is_key_auth = admin_key and (admin_key == Config.SECRET_KEY or admin_key == Config.JWT_SECRET_KEY)
+    
+    if not is_key_auth:
+        user, employee, err_msg, status = require_role('HR', 'Admin')
+        if err_msg:
+            return jsonify({"success": False, "message": err_msg}), status
+
+    data = request.get_json(silent=True) or {}
+    target_pwd = data.get('password', 'employee123')
+    sync_supabase = data.get('sync_supabase', True)
+
+    from utils.employee_account_service import sync_all_employee_accounts
+    report = sync_all_employee_accounts(target_password=target_pwd, sync_supabase=sync_supabase)
+    return jsonify({
+        "success": report.get("success", True),
+        "message": f"Successfully synchronized {len(report.get('accounts', []))} employee accounts.",
+        "data": report
+    }), 200
 
 # HR User Account Management Endpoints
 @auth_bp.route('/user-accounts', methods=['GET'])

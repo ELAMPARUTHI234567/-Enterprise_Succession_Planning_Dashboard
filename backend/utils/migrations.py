@@ -84,6 +84,17 @@ def run_schema_migrations(engine):
             else:
                 print("[MIGRATION] Table 'users' schema verified (column 'oauth_email' present).")
 
+            if 'must_change_password' not in user_columns:
+                print("[MIGRATION] Adding missing 'must_change_password' column to 'users' table...")
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN must_change_password BOOLEAN {bool_false}"))
+                    print("[MIGRATION] Column 'must_change_password' added successfully to 'users'.")
+                except Exception as e:
+                    print(f"[MIGRATION] Notice: Could not add 'must_change_password' to 'users': {str(e)}")
+            else:
+                print("[MIGRATION] Table 'users' schema verified (column 'must_change_password' present).")
+
         # 4. Migrate employees table if present
         if 'employees' in tables:
             emp_columns = [c['name'] for c in inspector.get_columns('employees')]

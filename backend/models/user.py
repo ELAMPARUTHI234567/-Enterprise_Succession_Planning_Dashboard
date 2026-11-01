@@ -13,6 +13,7 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(20), default='Employee', nullable=False) # 'HR', 'Manager', 'Employee'
     status = db.Column(db.String(20), default='Active', nullable=False)
+    must_change_password = db.Column(db.Boolean, default=False, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -48,6 +49,7 @@ class User(db.Model):
             "allowed_roles": allowed_roles,
             "is_multi_role": len(allowed_roles) > 1,
             "status": self.status,
+            "must_change_password": bool(getattr(self, 'must_change_password', False)),
             "employee_id": emp.id if emp else None,
             "employee_code": emp.employee_code if emp else None,
             "department": emp.department if emp else None,   # None when not linked to employee record

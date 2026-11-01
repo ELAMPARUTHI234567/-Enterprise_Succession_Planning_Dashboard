@@ -155,6 +155,7 @@ export const authService = {
   unlinkOAuthEmail: (id) => api.post(`/user-accounts/${id}/unlink-oauth-email`),
   toggleUserStatus: (id) => api.post(`/user-accounts/${id}/toggle-status`),
   switchRole: (role) => api.post('/switch-role', { role }),
+  changePassword: (data) => api.post('/change-password', data),
   logout: async () => {
     // 1. Sign out from Supabase session if active with timeout guard
     if (supabase?.auth) {
