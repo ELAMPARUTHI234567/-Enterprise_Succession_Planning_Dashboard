@@ -1,4 +1,5 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
+import time
 from models.employee import Employee
 from models.role import LeadershipRole
 from models.competency import Competency
@@ -9,16 +10,36 @@ from models.user import User
 from services.readiness_service import calculate_successor_readiness
 from services.gap_service import calculate_competency_gaps
 from extensions import db
-
 from utils.auth_middleware import get_current_user
 
 dashboard_bp = Blueprint('dashboard', __name__)
+
+# Lightweight in-memory TTL cache for dashboard analytics to eliminate redundant Supabase roundtrips
+_DASHBOARD_CACHE = {}
+_CACHE_TTL_SECONDS = 30  # 30-second TTL
+
+def get_cached_dashboard(cache_key):
+    now = time.time()
+    entry = _DASHBOARD_CACHE.get(cache_key)
+    if entry and (now - entry['time'] < _CACHE_TTL_SECONDS):
+        return entry['data']
+    return None
+
+def set_cached_dashboard(cache_key, data):
+    _DASHBOARD_CACHE[cache_key] = {
+        'time': time.time(),
+        'data': data
+    }
+
+def clear_dashboard_cache():
+    _DASHBOARD_CACHE.clear()
 
 @dashboard_bp.route('/dashboard-summary', methods=['GET'])
 def get_dashboard_summary():
     try:
         manager_id = request.args.get('manager_id', type=int)
         employee_id = request.args.get('employee_id', type=int)
+        force_refresh = request.args.get('refresh', '').lower() in ('true', '1') or request.args.get('nocache', '').lower() in ('true', '1')
 
         user, current_emp, _, _ = get_current_user()
         if user:
@@ -29,57 +50,57 @@ def get_dashboard_summary():
                 employee_id = current_emp.id if current_emp else -1
                 manager_id = None
 
-        total_roles = db.session.query(db.func.count(LeadershipRole.id)).scalar() or 0
-        total_competencies = db.session.query(db.func.count(Competency.id)).scalar() or 0
+        cache_key = f"{user.role if user else 'anon'}:{manager_id}:{employee_id}"
+        is_testing = current_app.config.get('TESTING', False)
+        if not force_refresh and not is_testing:
+            cached_data = get_cached_dashboard(cache_key)
+            if cached_data is not None:
+                return jsonify({"success": True, "data": cached_data, "cached": True}), 200
 
-        # Filter employees list if manager_id or employee_id provided
+        # Eager load roles & competencies once (eliminating redundant count roundtrips)
+        roles = LeadershipRole.query.all()
+        competencies = Competency.query.all()
+        total_roles = len(roles)
+        total_competencies = len(competencies)
+
+        # Filter employees list with eager loading of manager to avoid N+1 queries
         if manager_id:
-            employees = Employee.query.filter_by(manager_id=manager_id).all()
+            employees = Employee.query.options(db.joinedload(Employee.manager)).filter_by(manager_id=manager_id).all()
             total_employees = len(employees)
             total_managers = 1
         elif employee_id:
-            employees = Employee.query.filter_by(id=employee_id).all()
+            employees = Employee.query.options(db.joinedload(Employee.manager)).filter_by(id=employee_id).all()
             total_employees = len(employees)
             total_managers = 0
         else:
-            employees = Employee.query.all()
+            employees = Employee.query.options(db.joinedload(Employee.manager)).all()
             total_employees = len(employees)
             total_managers = db.session.query(db.func.count(User.id)).filter(db.func.lower(User.role) == 'manager').scalar() or 0
             if total_managers == 0:
-                total_managers = db.session.query(db.func.count(Employee.id)).filter(Employee.designation.ilike('%manager%')).scalar() or 0
+                total_managers = sum(1 for e in employees if 'manager' in (e.designation or '').lower())
 
+        # Single conditional aggregation query for all assessment status counts
         if manager_id or employee_id:
             scoped_emp_ids = [e.id for e in employees]
             if scoped_emp_ids:
-                pending_assessments = db.session.query(db.func.count(AssessmentAssignment.id)).filter(
-                    db.or_(AssessmentAssignment.status != 'Completed', AssessmentAssignment.status.is_(None)),
-                    AssessmentAssignment.employee_id.in_(scoped_emp_ids)
-                ).scalar() or 0
-                completed_assessments = db.session.query(db.func.count(AssessmentAssignment.id)).filter(
-                    AssessmentAssignment.status == 'Completed',
-                    AssessmentAssignment.employee_id.in_(scoped_emp_ids)
-                ).scalar() or 0
-                in_progress_assessments = db.session.query(db.func.count(AssessmentAssignment.id)).filter(
-                    AssessmentAssignment.status.in_(['In Progress', 'In-Progress']),
-                    AssessmentAssignment.employee_id.in_(scoped_emp_ids)
-                ).scalar() or 0
+                counts = db.session.query(
+                    db.func.count(db.case((AssessmentAssignment.status == 'Completed', 1))),
+                    db.func.count(db.case((db.or_(AssessmentAssignment.status != 'Completed', AssessmentAssignment.status.is_(None)), 1))),
+                    db.func.count(db.case((AssessmentAssignment.status.in_(['In Progress', 'In-Progress']), 1)))
+                ).filter(AssessmentAssignment.employee_id.in_(scoped_emp_ids)).first()
+                completed_assessments, pending_assessments, in_progress_assessments = counts or (0, 0, 0)
             else:
                 pending_assessments = 0
                 completed_assessments = 0
                 in_progress_assessments = 0
         else:
-            pending_assessments = db.session.query(db.func.count(AssessmentAssignment.id)).filter(
-                db.or_(AssessmentAssignment.status != 'Completed', AssessmentAssignment.status.is_(None))
-            ).scalar() or 0
-            completed_assessments = db.session.query(db.func.count(AssessmentAssignment.id)).filter(
-                AssessmentAssignment.status == 'Completed'
-            ).scalar() or 0
-            in_progress_assessments = db.session.query(db.func.count(AssessmentAssignment.id)).filter(
-                AssessmentAssignment.status.in_(['In Progress', 'In-Progress'])
-            ).scalar() or 0
+            counts = db.session.query(
+                db.func.count(db.case((AssessmentAssignment.status == 'Completed', 1))),
+                db.func.count(db.case((db.or_(AssessmentAssignment.status != 'Completed', AssessmentAssignment.status.is_(None)), 1))),
+                db.func.count(db.case((AssessmentAssignment.status.in_(['In Progress', 'In-Progress']), 1)))
+            ).first()
+            completed_assessments, pending_assessments, in_progress_assessments = counts or (0, 0, 0)
 
-        roles = LeadershipRole.query.all()
-        competencies = Competency.query.all()
         comp_by_id = {c.id: c for c in competencies}
 
         high_readiness_count = 0
@@ -192,7 +213,17 @@ def get_dashboard_summary():
             "top_successors": top_candidates_slice
         }
 
+        # Cache valid response in memory for 30s
+        set_cached_dashboard(cache_key, summary_data)
+
         return jsonify({"success": True, "data": summary_data}), 200
+    except Exception as e:
+        import traceback, sys
+        print(f"[ERROR] Failed to generate dashboard summary: {str(e)}\n{traceback.format_exc()}", file=sys.stderr)
+        return jsonify({
+            "success": False,
+            "message": "Unable to load dashboard summary analytics. Please retry or contact system administrator."
+        }), 500
     except Exception as e:
         import traceback, sys
         print(f"[ERROR] Failed to generate dashboard summary: {str(e)}\n{traceback.format_exc()}", file=sys.stderr)

@@ -48,49 +48,50 @@ export const EmployeeDashboard = () => {
   const fetchEmployeeData = async () => {
     setLoading(true);
     setError('');
+
+    // Safety timeout guard to prevent indefinite hanging
+    const timeoutId = setTimeout(() => {
+      setLoading(false);
+      if (!employeeProfile) {
+        setError('Employee portal loading timed out. Please click retry.');
+      }
+    }, 15000);
+
     try {
       // 1. Get authenticated user profile & linked employee info
       const meRes = await authService.getMe();
       let empData = null;
       if (meRes?.success && meRes?.data) {
         empData = meRes.data.employee_profile || meRes.data;
+        setEmployeeProfile(empData);
       }
 
       const targetRoleId = empData?.target_role_id || 1;
 
-      // 1b. Fetch full employee profile if linked ID exists
-      if (empData?.id) {
-        try {
-          const fullRes = await employeeService.getById(empData.id, targetRoleId);
-          if (fullRes?.success && fullRes.data) {
-            empData = fullRes.data;
-          }
-        } catch (e) {
-          console.warn('Could not load extended profile:', e);
-        }
-      }
-      setEmployeeProfile(empData);
+      // 2. Concurrently load extended profile, assessments, gaps, and readiness in parallel
+      const [fullRes, assRes, gapRes, readRes] = await Promise.all([
+        empData?.id ? employeeService.getById(empData.id, targetRoleId).catch(() => null) : Promise.resolve(null),
+        assessmentService.getMyAssessments().catch(() => null),
+        gapService.getMyGaps(targetRoleId).catch(() => null),
+        gapService.getMyReadiness(targetRoleId).catch(() => null),
+      ]);
 
-      // 2. Get assigned assessments for authenticated employee
-      const assRes = await assessmentService.getMyAssessments();
+      if (fullRes?.success && fullRes.data) {
+        setEmployeeProfile(fullRes.data);
+      }
       if (assRes?.success) {
         setMyAssessments(assRes.data || []);
       }
-
-      // 3. Get competency gap analysis for authenticated employee
-      const gapRes = await gapService.getMyGaps(targetRoleId);
       if (gapRes?.success) {
         setGapData(gapRes.data);
       }
-
-      // 4. Get readiness details for authenticated employee
-      const readRes = await gapService.getMyReadiness(targetRoleId);
       if (readRes?.success) {
         setReadinessData(readRes.data);
       }
     } catch (err) {
       setError(err.message || 'Error loading employee dashboard data');
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -99,11 +100,28 @@ export const EmployeeDashboard = () => {
     fetchEmployeeData();
   }, []);
 
-  if (loading) {
+  if (loading && !employeeProfile) {
     return (
       <div className="flex flex-col items-center justify-center h-96">
         <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mb-3" />
         <p className="text-xs font-semibold text-slate-500">Loading Personal Portal...</p>
+      </div>
+    );
+  }
+
+  if (error && !employeeProfile) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 bg-white rounded-2xl border border-rose-200 card-shadow text-center">
+        <ShieldAlert className="w-12 h-12 text-rose-500 mb-3" />
+        <h3 className="text-base font-bold text-slate-800">Unable to Load Employee Portal</h3>
+        <p className="text-xs text-slate-500 mt-1 mb-4 max-w-md">{error}</p>
+        <button
+          onClick={fetchEmployeeData}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all flex items-center space-x-2"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          <span>Retry Loading</span>
+        </button>
       </div>
     );
   }

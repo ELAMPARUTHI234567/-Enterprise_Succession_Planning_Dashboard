@@ -65,7 +65,9 @@ export const MainLayout = ({ children }) => {
 
   useEffect(() => {
     fetchNotifications();
-  }, [location.pathname]);
+    const interval = setInterval(fetchNotifications, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Close menus on outside click or escape key
   useEffect(() => {

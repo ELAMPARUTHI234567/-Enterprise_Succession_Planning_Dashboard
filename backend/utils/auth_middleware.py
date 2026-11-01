@@ -1,6 +1,7 @@
 import jwt
 from datetime import datetime, timezone
 from flask import request, jsonify
+from extensions import db
 from models.user import User
 from models.employee import Employee
 from config import Config
@@ -34,7 +35,7 @@ def get_current_user():
             return None, None, "Invalid token payload", 401
 
         user_id = int(sub_val)
-        user = User.query.get(user_id)
+        user = User.query.options(db.joinedload(User.employee_profile)).get(user_id)
         if not user:
             return None, None, "User account not found or deactivated", 401
 

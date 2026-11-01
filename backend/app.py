@@ -133,6 +133,16 @@ def create_app():
                 app.config["SQLALCHEMY_DATABASE_URI"] = Config.SQLITE_DATABASE_URI
                 print(f"[INFO] Local PostgreSQL connection unavailable. Defaulting to SQLite engine: {Config.SQLITE_DATABASE_URI}")
 
+    # Configure robust connection pooling for PostgreSQL (Supabase / Render)
+    if "postgresql" in str(app.config.get("SQLALCHEMY_DATABASE_URI", "")):
+        app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+            "pool_size": 10,
+            "max_overflow": 20,
+            "pool_recycle": 300,
+            "pool_pre_ping": True,
+            "pool_timeout": 30,
+        }
+
     # Initialize SQLAlchemy ONCE with finalized database URI
     db.init_app(app)
 

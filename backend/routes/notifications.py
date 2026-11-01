@@ -12,7 +12,10 @@ def get_user_notifications():
         return jsonify({"success": False, "message": err_msg}), status
 
     notifs = Notification.query.filter_by(user_id=user.id).order_by(Notification.created_at.desc()).limit(50).all()
-    unread_count = Notification.query.filter_by(user_id=user.id, is_read=False).count()
+    if len(notifs) < 50:
+        unread_count = sum(1 for n in notifs if not n.is_read)
+    else:
+        unread_count = Notification.query.filter_by(user_id=user.id, is_read=False).count()
 
     return jsonify({
         "success": True,

@@ -47,7 +47,16 @@ class Employee(db.Model):
         except Exception:
             return 0.0
 
-    def to_dict(self):
+    def to_dict(self, manager_name=None):
+        if manager_name is not None:
+            mgr_name = manager_name
+        elif not self.manager_id:
+            mgr_name = None
+        elif 'manager' in self.__dict__ and self.__dict__['manager'] is not None:
+            mgr_name = self.manager.name
+        else:
+            mgr_name = self.manager.name if self.manager else None
+
         return {
             "id": self.id,
             "user_id": self.user_id,
@@ -57,7 +66,7 @@ class Employee(db.Model):
             "department": self.department,
             "designation": self.designation,
             "manager_id": self.manager_id,
-            "manager_name": self.manager.name if self.manager else None,
+            "manager_name": mgr_name,
             "company_joining_date": self.company_joining_date,
             "company_tenure_years": self.calculate_company_tenure_years(),
             "experience_years": self.experience_years,

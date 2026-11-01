@@ -201,7 +201,11 @@ def get_my_assessments():
         else:
             target_emp_id = employee.id
 
-    assignments = AssessmentAssignment.query.filter_by(employee_id=target_emp_id).order_by(AssessmentAssignment.id.desc()).all()
+    assignments = AssessmentAssignment.query.options(
+        db.joinedload(AssessmentAssignment.assessment),
+        db.joinedload(AssessmentAssignment.employee),
+        db.joinedload(AssessmentAssignment.result)
+    ).filter_by(employee_id=target_emp_id).order_by(AssessmentAssignment.id.desc()).all()
     return jsonify({
         "success": True,
         "data": [a.to_dict() for a in assignments]
@@ -216,7 +220,10 @@ def get_my_results():
     if not employee:
         return jsonify({"success": True, "data": []}), 200
 
-    assignments = AssessmentAssignment.query.filter_by(employee_id=employee.id, status='Completed').order_by(AssessmentAssignment.id.desc()).all()
+    assignments = AssessmentAssignment.query.options(
+        db.joinedload(AssessmentAssignment.assessment),
+        db.joinedload(AssessmentAssignment.result)
+    ).filter_by(employee_id=employee.id, status='Completed').order_by(AssessmentAssignment.id.desc()).all()
     results = []
     for a in assignments:
         if a.result:
@@ -579,7 +586,11 @@ def get_assessment_results():
         return jsonify({"success": False, "message": err_msg}), status
 
     try:
-        query = AssessmentAssignment.query.filter_by(status='Completed')
+        query = AssessmentAssignment.query.options(
+            db.joinedload(AssessmentAssignment.assessment),
+            db.joinedload(AssessmentAssignment.employee),
+            db.joinedload(AssessmentAssignment.result)
+        ).filter_by(status='Completed')
 
         # RBAC Data Isolation
         if user.role.lower() not in ['hr', 'admin']:
@@ -1093,7 +1104,11 @@ def get_assessment_schedules():
     if err_msg:
         return jsonify({"success": False, "message": err_msg}), status
 
-    query = AssessmentAssignment.query.filter(AssessmentAssignment.scheduled_date.isnot(None))
+    query = AssessmentAssignment.query.options(
+        db.joinedload(AssessmentAssignment.assessment),
+        db.joinedload(AssessmentAssignment.employee),
+        db.joinedload(AssessmentAssignment.result)
+    ).filter(AssessmentAssignment.scheduled_date.isnot(None))
 
     role_lower = user.role.lower()
     if role_lower not in ['hr', 'admin']:

@@ -90,7 +90,7 @@ def get_manager_overview():
         return err
 
     # 1. Authorized direct reports
-    team_members = Employee.query.filter_by(manager_id=mgr_emp.id).order_by(Employee.id.asc()).all()
+    team_members = Employee.query.options(db.joinedload(Employee.manager)).filter_by(manager_id=mgr_emp.id).order_by(Employee.id.asc()).all()
     team_ids = [e.id for e in team_members]
 
     # 2. Tasks
@@ -258,7 +258,7 @@ def get_team_members():
     if err:
         return err
 
-    team_members = Employee.query.filter_by(manager_id=mgr_emp.id).order_by(Employee.id.asc()).all()
+    team_members = Employee.query.options(db.joinedload(Employee.manager)).filter_by(manager_id=mgr_emp.id).order_by(Employee.id.asc()).all()
     team_ids = [e.id for e in team_members]
 
     # Pre-fetch tasks counts

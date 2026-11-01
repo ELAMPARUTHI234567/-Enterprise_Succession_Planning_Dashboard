@@ -5,7 +5,17 @@ export default defineConfig({
   plugins: [react()],
   envPrefix: ['VITE_', 'SUPABASE_'],
   build: {
-    chunkSizeWarningLimit: 1000
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-charts': ['chart.js', 'react-chartjs-2'],
+          'vendor-icons': ['lucide-react'],
+          'vendor-supabase': ['@supabase/supabase-js', 'axios']
+        }
+      }
+    }
   },
   server: {
     port: 3000,

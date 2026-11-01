@@ -389,10 +389,67 @@ def run_schema_migrations(engine):
         # 17. Auditable verification of trusted administrative roles
         audit_and_sync_trusted_users(engine)
 
+        # 18. Create database performance indexes on critical lookup and foreign-key columns
+        create_performance_indexes(engine)
+
         print("[MIGRATION] Database schema migration check completed successfully.")
 
     except Exception as e:
         print(f"[WARNING] Schema migration check failed or skipped: {str(e)}")
+
+def create_performance_indexes(engine):
+    """
+    Idempotently creates high-performance B-tree indexes on foreign keys,
+    lookup filters, and status columns across Supabase PostgreSQL and SQLite.
+    Prevents table scans and drastically reduces query execution latencies.
+    """
+    indexes = [
+        ("idx_employees_mgr_id", "employees", "manager_id"),
+        ("idx_employees_usr_id", "employees", "user_id"),
+        ("idx_employees_email", "employees", "email"),
+        ("idx_employees_avail", "employees", "availability_status"),
+        ("idx_users_oauth_email", "users", "oauth_email"),
+        ("idx_users_email", "users", "email"),
+        ("idx_users_role_status", "users", "role, status"),
+        ("idx_assess_assign_emp_st", "assessment_assignments", "employee_id, status"),
+        ("idx_assess_assign_status", "assessment_assignments", "status"),
+        ("idx_assess_assign_assess_id", "assessment_assignments", "assessment_id"),
+        ("idx_assess_assign_sched_start", "assessment_assignments", "scheduled_start_datetime"),
+        ("idx_emp_comps_emp_id", "employee_competencies", "employee_id"),
+        ("idx_emp_comps_comp_id", "employee_competencies", "competency_id"),
+        ("idx_role_comps_role_id", "role_competencies", "role_id"),
+        ("idx_notifs_usr_unread", "notifications", "user_id, is_read"),
+        ("idx_notifs_usr_created", "notifications", "user_id, created_at"),
+        ("idx_team_tasks_mgr_id", "team_tasks", "manager_id"),
+        ("idx_team_tasks_emp_id", "team_tasks", "employee_id"),
+        ("idx_team_tasks_status", "team_tasks", "status"),
+        ("idx_team_goals_mgr_id", "team_goals", "manager_id"),
+        ("idx_team_issues_mgr_id", "team_issues", "manager_id"),
+        ("idx_mgr_feedback_mgr_id", "manager_feedbacks", "manager_id"),
+        ("idx_mgr_feedback_emp_id", "manager_feedbacks", "employee_id"),
+        ("idx_mgr_recs_mgr_id", "manager_recommendations", "manager_id"),
+        ("idx_mgr_recs_emp_id", "manager_recommendations", "employee_id"),
+        ("idx_emp_projects_emp_id", "employee_projects", "employee_id"),
+        ("idx_assign_questions_assign_id", "assignment_questions", "assignment_id"),
+        ("idx_assess_answers_assign_id", "assessment_answers", "assignment_id"),
+        ("idx_assess_results_assign_id", "assessment_results", "assignment_id"),
+    ]
+
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        
+        with engine.begin() as conn:
+            for idx_name, table_name, cols in indexes:
+                if table_name in tables:
+                    try:
+                        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name} ({cols})"))
+                    except Exception as idx_err:
+                        # Log but do not fail migration if specific index syntax differs
+                        pass
+        print("[MIGRATION] Database performance indexes verified and created.")
+    except Exception as e:
+        print(f"[WARNING] Performance index creation notice: {str(e)}")
 
 def audit_and_sync_trusted_users(engine):
     """

@@ -87,7 +87,7 @@ def get_employees():
     if availability and availability != 'All':
         query = query.filter(Employee.availability_status == availability)
 
-    employees = query.order_by(Employee.id.asc()).all()
+    employees = query.options(db.joinedload(Employee.manager)).order_by(Employee.id.asc()).all()
     roles = LeadershipRole.query.all()
     competencies = Competency.query.all()
     default_role = roles[0] if roles else None
@@ -123,7 +123,7 @@ def get_team_employees():
     if not current_emp:
         return jsonify({"success": True, "data": []}), 200
 
-    subordinates = Employee.query.filter_by(manager_id=current_emp.id).all()
+    subordinates = Employee.query.options(db.joinedload(Employee.manager)).filter_by(manager_id=current_emp.id).all()
     return jsonify({
         "success": True,
         "data": [s.to_dict() for s in subordinates]
@@ -1015,7 +1015,7 @@ def get_employee_directory():
     if availability and availability != 'All':
         query = query.filter(Employee.availability_status == availability)
 
-    employees = query.order_by(Employee.id.asc()).all()
+    employees = query.options(db.joinedload(Employee.manager)).order_by(Employee.id.asc()).all()
 
     is_hr = user.role.lower() in ['hr', 'admin']
     mgr_id = current_emp.id if current_emp else None

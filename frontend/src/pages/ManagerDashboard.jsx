@@ -26,9 +26,23 @@ export const ManagerDashboard = () => {
   const [error, setError] = useState('');
   const [notification, setNotification] = useState(null); // { type: 'success' | 'error', message: '' }
 
-  // Core Data
-  const [overview, setOverview] = useState(null);
-  const [teamMembers, setTeamMembers] = useState([]);
+  // Core Data with Session Caching for Instant Loading
+  const [overview, setOverview] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('manager_overview');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [teamMembers, setTeamMembers] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('manager_team');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [tasks, setTasks] = useState([]);
   const [goals, setGoals] = useState([]);
   const [issues, setIssues] = useState([]);
@@ -103,8 +117,16 @@ export const ManagerDashboard = () => {
   };
 
   const fetchManagerData = async () => {
-    setLoading(true);
+    if (!overview) setLoading(true);
     setError('');
+
+    const timeoutId = setTimeout(() => {
+      setLoading(false);
+      if (!overview) {
+        setError('Loading manager dashboard timed out. Please click retry.');
+      }
+    }, 15000);
+
     try {
       let currentManager = user;
       try {
@@ -134,8 +156,14 @@ export const ManagerDashboard = () => {
         roleService.getAll().catch(() => null)
       ]);
 
-      if (overviewRes?.success) setOverview(overviewRes);
-      if (teamRes?.success) setTeamMembers(teamRes.data || []);
+      if (overviewRes?.success) {
+        setOverview(overviewRes);
+        try { sessionStorage.setItem('manager_overview', JSON.stringify(overviewRes)); } catch {}
+      }
+      if (teamRes?.success) {
+        setTeamMembers(teamRes.data || []);
+        try { sessionStorage.setItem('manager_team', JSON.stringify(teamRes.data || [])); } catch {}
+      }
       if (tasksRes?.success) setTasks(tasksRes.data || []);
       if (goalsRes?.success) setGoals(goalsRes.data || []);
       if (issuesRes?.success) setIssues(issuesRes.data || []);
@@ -147,6 +175,7 @@ export const ManagerDashboard = () => {
     } catch (err) {
       setError(err.message || 'Error loading dynamic manager dashboard data');
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };
