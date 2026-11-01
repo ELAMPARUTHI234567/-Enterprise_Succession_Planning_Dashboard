@@ -19,7 +19,7 @@ import {
   X
 } from 'lucide-react';
 import { authService } from '../services/api';
-import { supabase, getOAuthRedirectUrl } from '../utils/supabaseClient';
+import { supabase, getOAuthRedirectUrl, KNOWN_SUPABASE_ANON_KEY } from '../utils/supabaseClient';
 
 const GoogleIcon = ({ className = "w-4 h-4" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -357,8 +357,10 @@ export const Login = () => {
     setOnboardLoading(true);
 
     try {
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || KNOWN_SUPABASE_ANON_KEY || '';
       const res = await authService.onboardEmployee({
         access_token: onboardToken,
+        apikey: anonKey,
         name: onboardData.name.trim(),
         department: onboardData.department.trim(),
         designation: onboardData.designation.trim(),

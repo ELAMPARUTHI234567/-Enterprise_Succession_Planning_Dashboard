@@ -121,12 +121,29 @@ api.interceptors.response.use(
 
 export const authService = {
   login: (credentials) => api.post('/login', credentials),
-  loginSupabase: (accessToken, metadata = {}) => api.post('/supabase', { 
-    access_token: accessToken,
-    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY || KNOWN_SUPABASE_ANON_KEY || '',
-    user_metadata: metadata
-  }),
-  onboardEmployee: (data) => api.post('/onboard-employee', data),
+  loginSupabase: (accessToken, metadata = {}) => {
+    const key = import.meta.env.VITE_SUPABASE_ANON_KEY || KNOWN_SUPABASE_ANON_KEY || '';
+    return api.post('/supabase', { 
+      access_token: accessToken,
+      apikey: key,
+      user_metadata: metadata
+    }, {
+      headers: {
+        'apikey': key
+      }
+    });
+  },
+  onboardEmployee: (data) => {
+    const key = data.apikey || import.meta.env.VITE_SUPABASE_ANON_KEY || KNOWN_SUPABASE_ANON_KEY || '';
+    return api.post('/onboard-employee', {
+      ...data,
+      apikey: key
+    }, {
+      headers: {
+        'apikey': key
+      }
+    });
+  },
   getPendingRegistrations: () => api.get('/user-accounts/pending'),
   approveUserAccount: (id) => api.post(`/user-accounts/${id}/approve`),
   rejectUserAccount: (id) => api.post(`/user-accounts/${id}/reject`),

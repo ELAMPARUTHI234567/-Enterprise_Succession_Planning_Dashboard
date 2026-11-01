@@ -1,7 +1,13 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from backend directory if present, otherwise cwd
+_backend_dir = os.path.abspath(os.path.dirname(__file__))
+_backend_env = os.path.join(_backend_dir, '.env')
+if os.path.exists(_backend_env):
+    load_dotenv(_backend_env)
+else:
+    load_dotenv()
 
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "enterprise_succession_secret_key_2026")
@@ -78,11 +84,23 @@ class Config:
     AI_MODEL_PATH = os.getenv("AI_MODEL_PATH", os.path.join(BASE_DIR, "../ml/model.joblib"))
 
     # Supabase Configuration
-    SUPABASE_URL = os.getenv(
-        "SUPABASE_URL",
-        "https://livemvqdyupoipuajury.supabase.co").rstrip("/")
+    # Uses environment variables (with fallback to canonical project configuration)
+    KNOWN_SUPABASE_URL = "https://livemvqdyupoipuajury.supabase.co"
+    KNOWN_SUPABASE_ANON_KEY = "sb_publishable_WrkMC4kfEAQC7dAfpmln-Q_CKfrm6_0"
 
-    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+    SUPABASE_URL = (
+        os.getenv("SUPABASE_URL") or 
+        os.getenv("VITE_SUPABASE_URL") or 
+        KNOWN_SUPABASE_URL
+    ).rstrip("/")
+
+    SUPABASE_ANON_KEY = (
+        os.getenv("SUPABASE_ANON_KEY") or 
+        os.getenv("SUPABASE_KEY") or 
+        os.getenv("SUPABASE_PUBLISHABLE_KEY") or 
+        os.getenv("VITE_SUPABASE_ANON_KEY") or 
+        KNOWN_SUPABASE_ANON_KEY
+    ).strip()
 
     # Authoritative Server-Side Role Mapping & Multi-Role Permissions
     # Maps cryptographically verified identities to organizational roles and portal privileges.

@@ -86,9 +86,13 @@ def validate_supabase_access_token(access_token, apikey=None, user_metadata=None
 
     user_endpoint = f"{configured_url}/auth/v1/user"
     resolved_apikey = (
-        getattr(Config, 'SUPABASE_ANON_KEY', None) or 
-        apikey or 
-        ''
+        (apikey or '').strip() or 
+        (getattr(Config, 'SUPABASE_ANON_KEY', '') or '').strip() or 
+        os.getenv("SUPABASE_ANON_KEY", "").strip() or
+        os.getenv("SUPABASE_KEY", "").strip() or
+        os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip() or
+        os.getenv("VITE_SUPABASE_ANON_KEY", "").strip() or
+        getattr(Config, 'KNOWN_SUPABASE_ANON_KEY', 'sb_publishable_WrkMC4kfEAQC7dAfpmln-Q_CKfrm6_0')
     )
 
     req = urllib.request.Request(user_endpoint)
@@ -691,7 +695,7 @@ def onboard_employee():
     data = request.get_json() or {}
     auth_header = request.headers.get('Authorization', '')
     access_token = data.get('access_token') or auth_header.replace('Bearer ', '').strip()
-    apikey = data.get('apikey') or request.headers.get('apikey') or ''
+    apikey = data.get('apikey') or request.headers.get('apikey') or request.headers.get('x-api-key') or ''
     user_metadata = data.get('user_metadata', {})
 
     if not access_token:
