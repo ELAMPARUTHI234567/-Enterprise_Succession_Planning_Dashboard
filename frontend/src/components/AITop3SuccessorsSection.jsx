@@ -29,8 +29,9 @@ export const AITop3SuccessorsSection = ({ isManager = false, onNavigateProfile }
     let mounted = true;
     const fetchRoles = async () => {
       try {
-        const res = await roleService.getRoles();
-        if (mounted && res.success && res.data && res.data.length > 0) {
+        const fetchFn = roleService.getRoles || roleService.getAll;
+        const res = await fetchFn();
+        if (mounted && res && res.success && Array.isArray(res.data) && res.data.length > 0) {
           setRoles(res.data);
           setSelectedRoleId(res.data[0].id);
         }
@@ -169,15 +170,19 @@ export const AITop3SuccessorsSection = ({ isManager = false, onNavigateProfile }
                 Target Leadership Role
               </label>
               <select
-                value={selectedRoleId}
+                value={selectedRoleId || ''}
                 onChange={(e) => setSelectedRoleId(Number(e.target.value))}
                 className="bg-slate-800 border border-slate-700 text-white text-xs font-semibold rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none min-w-[220px]"
               >
-                {roles.map(r => (
-                  <option key={r.id} value={r.id}>
-                    {r.role_name} ({r.department})
-                  </option>
-                ))}
+                {roles.length === 0 ? (
+                  <option value="">Loading leadership positions...</option>
+                ) : (
+                  roles.map(r => (
+                    <option key={r.id} value={r.id}>
+                      {r.role_name} ({r.department})
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 

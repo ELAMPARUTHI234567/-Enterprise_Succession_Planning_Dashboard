@@ -1,4 +1,5 @@
 import logging
+import time
 from extensions import db
 from models.competency import Competency
 from models.employee_competency import EmployeeCompetency
@@ -8,7 +9,13 @@ from sqlalchemy import func
 
 logger = logging.getLogger(__name__)
 
-def get_competency_intelligence(manager_id=None, department=None):
+_COMP_INTEL_CACHE = {}
+_COMP_INTEL_CACHE_TTL = 60 # 60 seconds
+
+def clear_competency_intelligence_cache():
+    _COMP_INTEL_CACHE.clear()
+
+def get_competency_intelligence(manager_id=None, department=None, force_refresh=False):
     """
     Module 3: Enterprise & Team Competency Gap Intelligence across the 8 core dimensions:
     Leadership, Communication, Decision Making, Team Management, Strategic Thinking,
@@ -16,6 +23,12 @@ def get_competency_intelligence(manager_id=None, department=None):
     
     Supports filtering by manager (for Manager Portal) or department.
     """
+    cache_key = f"{manager_id}:{department}"
+    now = time.time()
+    if not force_refresh and cache_key in _COMP_INTEL_CACHE:
+        entry = _COMP_INTEL_CACHE[cache_key]
+        if now - entry["timestamp"] < _COMP_INTEL_CACHE_TTL:
+            return entry["data"]
     # 1. Base employee query
     emp_query = Employee.query.filter(Employee.availability_status != 'Unavailable')
     if manager_id:
@@ -141,7 +154,7 @@ def get_competency_intelligence(manager_id=None, department=None):
             "Continuous reinforcement through advanced executive simulations recommended."
         )
 
-    return {
+    result = {
         "success": True,
         "total_employees": len(employees),
         "scope": f"Manager #{manager_id}" if manager_id else "Enterprise-wide",
@@ -151,6 +164,11 @@ def get_competency_intelligence(manager_id=None, department=None):
         "department_breakdown": dept_breakdown,
         "ai_insights": ai_narrative
     }
+    _COMP_INTEL_CACHE[cache_key] = {
+        "timestamp": now,
+        "data": result
+    }
+    return result
 
 def _get_training_recommendation(comp_name, gap):
     catalog = {

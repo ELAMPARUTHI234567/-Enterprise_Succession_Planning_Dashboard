@@ -80,6 +80,17 @@ def compare_candidates_route():
     if not candidate_ids:
         return jsonify({"success": False, "message": "candidate_ids array is required"}), 400
 
+    # Manager scoping: candidates must belong to manager's direct reports
+    if user.role.lower() == 'manager' and employee:
+        valid_reports = set(e.id for e in Employee.query.filter_by(manager_id=employee.id).all())
+        valid_reports.add(employee.id)
+        for cid in candidate_ids:
+            try:
+                if int(cid) not in valid_reports:
+                    return jsonify({"success": False, "message": "Access forbidden: Managers can only view direct reports."}), 403
+            except (ValueError, TypeError):
+                return jsonify({"success": False, "message": "Invalid candidate ID format"}), 400
+
     result = compare_candidates_for_role(role_id, candidate_ids)
     return jsonify(result), 200
 
@@ -101,6 +112,16 @@ def shortlist_candidate_route():
 
     if not employee_id or not role_id:
         return jsonify({"success": False, "message": "employee_id and role_id are required"}), 400
+
+    # Manager scoping: candidate must be an authorized direct report
+    if user.role.lower() == 'manager' and employee:
+        try:
+            target_emp_id = int(employee_id)
+            target = Employee.query.get(target_emp_id)
+            if not target or (target.manager_id != employee.id and target.id != employee.id):
+                return jsonify({"success": False, "message": "Access forbidden: Managers can only view direct reports."}), 403
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "message": "Invalid employee ID format"}), 400
 
     result = shortlist_candidate_for_role(
         employee_id=employee_id,

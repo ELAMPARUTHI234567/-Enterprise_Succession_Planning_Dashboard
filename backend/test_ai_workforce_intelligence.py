@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import unittest
 import json
 from app import create_app
@@ -182,6 +186,81 @@ class TestAIWorkforceIntelligence(unittest.TestCase):
             data = res.get_json()
             self.assertTrue(data['success'])
             self.assertTrue(len(data['reply']) > 0)
+
+    def test_10_manager_candidate_comparison_authorization(self):
+        """Test that Manager can only compare authorized direct reports, 403 on non-reports"""
+        token = self.get_jwt_token('manager', 'manager123')
+        # Manager is Sneha Reddy (ID 4). Direct reports in seed data: 1, 2, 3, 8.
+        # Compare direct reports 1 and 2 -> Should succeed (200)
+        res_ok = self.client.post(
+            '/api/ai/compare-candidates',
+            data=json.dumps({"role_id": 1, "candidate_ids": [1, 2]}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        self.assertEqual(res_ok.status_code, 200)
+
+        # Compare unauthorized employee (ID 5 or 999) -> Should return 403
+        res_forbidden = self.client.post(
+            '/api/ai/compare-candidates',
+            data=json.dumps({"role_id": 1, "candidate_ids": [1, 999]}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        self.assertEqual(res_forbidden.status_code, 403)
+        self.assertIn("Managers can only view direct reports", res_forbidden.get_json()['message'])
+
+    def test_11_manager_shortlist_authorization(self):
+        """Test that Manager can only shortlist authorized direct reports, 403 on non-reports"""
+        token = self.get_jwt_token('manager', 'manager123')
+        # Shortlist direct report 1 -> Should succeed (200)
+        res_ok = self.client.post(
+            '/api/ai/shortlist',
+            data=json.dumps({"employee_id": 1, "role_id": 1, "action": "Shortlist"}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        self.assertEqual(res_ok.status_code, 200)
+
+        # Shortlist unauthorized employee (999) -> Should return 403
+        res_forbidden = self.client.post(
+            '/api/ai/shortlist',
+            data=json.dumps({"employee_id": 999, "role_id": 1, "action": "Shortlist"}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        self.assertEqual(res_forbidden.status_code, 403)
+        self.assertIn("Managers can only view direct reports", res_forbidden.get_json()['message'])
+
+    def test_12_manager_recommendations_authorization(self):
+        """Test manager authorization on predict-readiness and recommendation endpoints"""
+        token = self.get_jwt_token('manager', 'manager123')
+        # Direct report 1 -> Should succeed (200)
+        res_ok = self.client.post(
+            '/api/predict-readiness',
+            data=json.dumps({"employee_id": 1, "role_id": 1}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        self.assertEqual(res_ok.status_code, 200)
+
+        # Unauthorized employee 999 -> Should return 403
+        res_forbidden = self.client.post(
+            '/api/predict-readiness',
+            data=json.dumps({"employee_id": 999, "role_id": 1}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        self.assertEqual(res_forbidden.status_code, 403)
+
+    def test_13_executive_summary_fast_and_cached(self):
+        """Test executive summary performance and caching"""
+        token = self.get_jwt_token('hr', 'hr123')
+        res1 = self.client.get('/api/ai/workforce-summary', headers={'Authorization': f'Bearer {token}'})
+        self.assertEqual(res1.status_code, 200)
+        res2 = self.client.get('/api/ai/workforce-summary', headers={'Authorization': f'Bearer {token}'})
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res1.get_json()['total_leadership_roles'], res2.get_json()['total_leadership_roles'])
 
 if __name__ == '__main__':
     unittest.main()

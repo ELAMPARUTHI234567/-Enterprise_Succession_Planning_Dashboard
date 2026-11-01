@@ -403,13 +403,17 @@ export const Successors = () => {
             <Award className="w-4 h-4 text-indigo-600" />
             <span className="text-xs font-bold text-slate-700">Role:</span>
             <select
-              value={selectedRoleId}
+              value={selectedRoleId || ''}
               onChange={handleRoleChange}
               className="bg-transparent text-xs font-bold text-slate-900 focus:outline-none cursor-pointer"
             >
-              {roles.map(r => (
-                <option key={r.id} value={r.id}>{r.role_name} ({r.department})</option>
-              ))}
+              {roles.length === 0 ? (
+                <option value="">Loading leadership positions...</option>
+              ) : (
+                roles.map(r => (
+                  <option key={r.id} value={r.id}>{r.role_name} ({r.department})</option>
+                ))
+              )}
             </select>
           </div>
 

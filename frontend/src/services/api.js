@@ -197,6 +197,7 @@ export const authService = {
 
 export const employeeService = {
   getAll: (params, config = {}) => api.get('/employees', { params, ...config }),
+  getEmployees: (params, config = {}) => api.get('/employees', { params, ...config }),
   getDirectory: (params) => api.get('/employees/directory', { params }),
   getById: (id, roleId = 1, config = {}) => api.get(`/employees/${id}`, { params: { role_id: roleId }, ...config }),
   create: (data) => api.post('/employees', data),
@@ -234,6 +235,7 @@ export const employeeService = {
 
 export const roleService = {
   getAll: () => api.get('/roles'),
+  getRoles: () => api.get('/roles'),
   getById: (id) => api.get(`/roles/${id}`),
   create: (data) => api.post('/roles', data),
   update: (id, data) => api.put(`/roles/${id}`, data),

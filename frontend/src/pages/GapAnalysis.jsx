@@ -18,20 +18,28 @@ export const GapAnalysis = () => {
 
   const fetchOptions = async () => {
     setLoading(true);
+    setError('');
     try {
-      const empRes = await employeeService.getAll();
-      if (empRes.success && empRes.data.length > 0) {
-        setEmployees(empRes.data);
-        setSelectedEmpId(empRes.data[0].id);
-      }
+      const [empRes, roleRes] = await Promise.all([
+        (employeeService.getAll || employeeService.getEmployees)(),
+        (roleService.getAll || roleService.getRoles)()
+      ]);
 
-      const roleRes = await roleService.getAll();
-      if (roleRes.success && roleRes.data.length > 0) {
-        setRoles(roleRes.data);
-        setSelectedRoleId(roleRes.data[0].id);
+      const empList = (empRes && empRes.success && Array.isArray(empRes.data)) ? empRes.data : [];
+      const roleList = (roleRes && roleRes.success && Array.isArray(roleRes.data)) ? roleRes.data : [];
+
+      setEmployees(empList);
+      setRoles(roleList);
+
+      if (empList.length > 0) {
+        setSelectedEmpId(empList[0].id);
+      }
+      if (roleList.length > 0) {
+        setSelectedRoleId(roleList[0].id);
       }
     } catch (err) {
-      setError(err.message);
+      console.error('Error fetching options for Gap Analysis:', err);
+      setError(err.message || 'Failed to load options for gap analysis');
     } finally {
       setLoading(false);
     }
@@ -74,32 +82,65 @@ export const GapAnalysis = () => {
         <p className="text-xs text-slate-500 mt-0.5">Quantitative gap identification and strength/improvement categorization</p>
       </div>
 
+      {error && (
+        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium rounded-xl flex items-center justify-between">
+          <span>{error}</span>
+          <button
+            onClick={fetchOptions}
+            className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold flex items-center space-x-1"
+          >
+            <RefreshCw className="w-3.5 h-3.5 mr-1" />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
+
       {/* Selectors */}
       <div className="bg-white rounded-xl p-5 border border-slate-200/80 card-shadow grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-bold text-slate-700 mb-1">Select Employee:</label>
-          <select
-            value={selectedEmpId}
-            onChange={(e) => setSelectedEmpId(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            {employees.map(e => (
-              <option key={e.id} value={e.id}>{e.name} ({e.employee_code} • {e.department})</option>
-            ))}
-          </select>
+          {loading && employees.length === 0 ? (
+            <div className="h-9 bg-slate-100 rounded-lg animate-pulse flex items-center px-3 text-xs text-slate-400">
+              Loading employees...
+            </div>
+          ) : (
+            <select
+              value={selectedEmpId}
+              onChange={(e) => setSelectedEmpId(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              {employees.length === 0 ? (
+                <option value="">No authorized employees found</option>
+              ) : (
+                employees.map(e => (
+                  <option key={e.id} value={e.id}>{e.name} ({e.employee_code} • {e.department})</option>
+                ))
+              )}
+            </select>
+          )}
         </div>
 
         <div>
           <label className="block text-xs font-bold text-slate-700 mb-1">Select Target Leadership Position:</label>
-          <select
-            value={selectedRoleId}
-            onChange={(e) => setSelectedRoleId(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            {roles.map(r => (
-              <option key={r.id} value={r.id}>{r.role_name} ({r.department})</option>
-            ))}
-          </select>
+          {loading && roles.length === 0 ? (
+            <div className="h-9 bg-slate-100 rounded-lg animate-pulse flex items-center px-3 text-xs text-slate-400">
+              Loading leadership positions...
+            </div>
+          ) : (
+            <select
+              value={selectedRoleId}
+              onChange={(e) => setSelectedRoleId(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              {roles.length === 0 ? (
+                <option value="">No leadership positions found</option>
+              ) : (
+                roles.map(r => (
+                  <option key={r.id} value={r.id}>{r.role_name} ({r.department})</option>
+                ))
+              )}
+            </select>
+          )}
         </div>
       </div>
 

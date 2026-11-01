@@ -20,18 +20,28 @@ def predict_readiness_route():
     if not employee_id:
         return jsonify({"success": False, "message": "employee_id is required"}), 400
 
+    try:
+        emp_id_int = int(employee_id)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "message": "Invalid employee_id format"}), 400
+
     user, current_emp, _, _ = get_current_user()
     if user:
         role_lower = user.role.lower()
+        if not current_emp and (user.email or getattr(user, 'oauth_email', None)):
+            current_emp = Employee.query.filter(
+                (Employee.email == user.email) | (Employee.email == getattr(user, 'oauth_email', None))
+            ).first()
+
         if role_lower == 'employee':
-            if not current_emp or current_emp.id != employee_id:
+            if not current_emp or current_emp.id != emp_id_int:
                 return jsonify({"success": False, "message": "Access forbidden: Employees can only predict their own readiness."}), 403
         elif role_lower == 'manager':
-            target = Employee.query.get(employee_id)
-            if not current_emp or (current_emp.id != employee_id and (not target or target.manager_id != current_emp.id)):
+            target = Employee.query.get(emp_id_int)
+            if not current_emp or (current_emp.id != emp_id_int and (not target or target.manager_id != current_emp.id)):
                 return jsonify({"success": False, "message": "Access forbidden: Managers can only view direct reports."}), 403
 
-    result = run_ml_readiness_prediction(employee_id, role_id)
+    result = run_ml_readiness_prediction(emp_id_int, role_id)
     if not result["success"]:
         return jsonify(result), 400
 
@@ -50,18 +60,28 @@ def generate_ai_recommendation():
     if not employee_id:
         return jsonify({"success": False, "message": "employee_id is required"}), 400
 
+    try:
+        emp_id_int = int(employee_id)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "message": "Invalid employee_id format"}), 400
+
     user, current_emp, _, _ = get_current_user()
     if user:
         role_lower = user.role.lower()
+        if not current_emp and (user.email or getattr(user, 'oauth_email', None)):
+            current_emp = Employee.query.filter(
+                (Employee.email == user.email) | (Employee.email == getattr(user, 'oauth_email', None))
+            ).first()
+
         if role_lower == 'employee':
-            if not current_emp or current_emp.id != employee_id:
+            if not current_emp or current_emp.id != emp_id_int:
                 return jsonify({"success": False, "message": "Access forbidden: Employees can only view their own recommendations."}), 403
         elif role_lower == 'manager':
-            target = Employee.query.get(employee_id)
-            if not current_emp or (current_emp.id != employee_id and (not target or target.manager_id != current_emp.id)):
+            target = Employee.query.get(emp_id_int)
+            if not current_emp or (current_emp.id != emp_id_int and (not target or target.manager_id != current_emp.id)):
                 return jsonify({"success": False, "message": "Access forbidden: Managers can only view direct reports."}), 403
 
-    employee = Employee.query.get(employee_id)
+    employee = Employee.query.get(emp_id_int)
     role = LeadershipRole.query.get(role_id)
 
     if not employee or not role:
@@ -139,24 +159,38 @@ def role_replacement_recommendation():
     unavail_emp_id = data.get('employee_id')
     vacant_role_id = data.get('role_id')
 
-    # If employee specified, set their status to Unavailable
+    # If employee specified, verify access and simulate unavailability without permanently changing database state
     unavail_emp = None
     if unavail_emp_id:
-        unavail_emp = Employee.query.get(unavail_emp_id)
-        if unavail_emp:
-            unavail_emp.availability_status = 'Unavailable'
-            db.session.commit()
+        try:
+            unavail_id_int = int(unavail_emp_id)
+            unavail_emp = Employee.query.get(unavail_id_int)
+        except (ValueError, TypeError):
+            unavail_emp = None
+
+        if user.role.lower() == 'manager' and employee:
+            if unavail_emp and unavail_emp.manager_id != employee.id and unavail_emp.id != employee.id:
+                return jsonify({"success": False, "message": "Access forbidden: Managers can only view direct reports."}), 403
 
     if not vacant_role_id and unavail_emp:
         # Default to Project Manager (1) or Team Lead (2)
         vacant_role_id = 1
 
-    vacant_role = LeadershipRole.query.get(vacant_role_id or 1)
+    try:
+        vacant_role_id_int = int(vacant_role_id) if vacant_role_id else 1
+    except (ValueError, TypeError):
+        vacant_role_id_int = 1
+
+    vacant_role = LeadershipRole.query.get(vacant_role_id_int)
     if not vacant_role:
         return jsonify({"success": False, "message": "Vacant role not found"}), 404
 
-    # Find available candidates
-    candidates_query = Employee.query.filter(Employee.availability_status == 'Available').all()
+    # Find available candidates (isolated to direct reports for managers)
+    base_query = Employee.query.filter(Employee.availability_status == 'Available')
+    if user.role.lower() == 'manager' and employee:
+        candidates_query = base_query.filter_by(manager_id=employee.id).all()
+    else:
+        candidates_query = base_query.all()
 
     ranked_candidates = []
     for cand in candidates_query:

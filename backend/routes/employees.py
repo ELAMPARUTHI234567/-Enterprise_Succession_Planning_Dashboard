@@ -56,6 +56,8 @@ def get_employees():
     manager_id = request.args.get('manager_id', type=int)
     availability = request.args.get('availability', '').strip()
 
+    include_readiness = request.args.get('include_readiness', 'true').lower() in ('true', '1')
+
     user, current_emp, err_msg, _ = get_current_user()
     query = Employee.query
 
@@ -63,8 +65,17 @@ def get_employees():
     if user:
         role_lower = user.role.lower()
         if role_lower == 'manager':
+            if not current_emp and (user.email or getattr(user, 'oauth_email', None)):
+                current_emp = Employee.query.filter(
+                    (Employee.user_id == user.id) |
+                    (Employee.email == user.email) |
+                    (Employee.email == getattr(user, 'oauth_email', None))
+                ).first()
             if current_emp:
                 manager_id = current_emp.id
+            else:
+                # Unresolved manager account sees empty team scope
+                return jsonify({"success": True, "data": []}), 200
         elif role_lower == 'employee':
             if current_emp:
                 query = query.filter(Employee.id == current_emp.id)
@@ -88,6 +99,9 @@ def get_employees():
         query = query.filter(Employee.availability_status == availability)
 
     employees = query.options(db.joinedload(Employee.manager)).order_by(Employee.id.asc()).all()
+    if not include_readiness:
+        return jsonify({"success": True, "data": [e.to_dict() for e in employees]}), 200
+
     roles = LeadershipRole.query.all()
     competencies = Competency.query.all()
     default_role = roles[0] if roles else None

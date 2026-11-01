@@ -53,6 +53,18 @@ def get_current_user():
         employee = user.employee_profile
         if not employee:
             employee = Employee.query.filter_by(user_id=user.id).first()
+        if not employee and (user.email or getattr(user, 'oauth_email', None)):
+            # Robust fallback: link by authenticated email or oauth_email
+            employee = Employee.query.filter(
+                (Employee.email == user.email) |
+                (Employee.email == getattr(user, 'oauth_email', None))
+            ).first()
+            if employee and not employee.user_id:
+                try:
+                    employee.user_id = user.id
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
 
         # Attach verified authenticated session claims to request context
         request.auth_email = payload.get("auth_email")

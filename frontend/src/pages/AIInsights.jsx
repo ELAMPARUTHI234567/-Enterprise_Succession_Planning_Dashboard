@@ -28,15 +28,32 @@ export const AIInsights = () => {
 
   const fetchInitialLists = async () => {
     try {
-      const empRes = await employeeService.getAll();
-      if (empRes.success) setEmployees(empRes.data || []);
+      const [empRes, roleRes] = await Promise.all([
+        (employeeService.getAll || employeeService.getEmployees)(),
+        (roleService.getAll || roleService.getRoles)()
+      ]);
 
-      const roleRes = await roleService.getAll();
-      if (roleRes.success) setRoles(roleRes.data || []);
-      
-      // Auto trigger initial AI insights for Employee 1 & Role 1
-      handleGenerateInsights(1, 1);
-      handleGenerateReplacement(1, 1);
+      const empList = (empRes && empRes.success && Array.isArray(empRes.data)) ? empRes.data : [];
+      const roleList = (roleRes && roleRes.success && Array.isArray(roleRes.data)) ? roleRes.data : [];
+
+      setEmployees(empList);
+      setRoles(roleList);
+
+      if (empList.length > 0 && roleList.length > 0) {
+        const defaultEmpId = empList[0].id;
+        const defaultRoleId = roleList[0].id;
+
+        setSelectedEmpId(defaultEmpId);
+        setUnavailEmpId(defaultEmpId);
+        setSelectedRoleId(defaultRoleId);
+        setReplacementRoleId(defaultRoleId);
+
+        // Auto trigger initial AI insights for the first authorized employee & role
+        handleGenerateInsights(defaultEmpId, defaultRoleId);
+        handleGenerateReplacement(defaultEmpId, defaultRoleId);
+      } else if (empList.length === 0) {
+        setError('No authorized direct reports or employees found for this account.');
+      }
     } catch (err) {
       setError(err.message || 'Error loading employee list');
     }
@@ -130,30 +147,38 @@ export const AIInsights = () => {
             <div className="sm:col-span-5">
               <label className="block text-xs font-bold text-slate-700 mb-1">Select Employee</label>
               <select
-                value={selectedEmpId}
+                value={selectedEmpId || ''}
                 onChange={(e) => setSelectedEmpId(Number(e.target.value))}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
               >
-                {employees.map(emp => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.name} ({emp.designation} • {emp.department})
-                  </option>
-                ))}
+                {employees.length === 0 ? (
+                  <option value="">No authorized employees found</option>
+                ) : (
+                  employees.map(emp => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name} ({emp.designation} • {emp.department})
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 
             <div className="sm:col-span-5">
               <label className="block text-xs font-bold text-slate-700 mb-1">Target Leadership Role</label>
               <select
-                value={selectedRoleId}
+                value={selectedRoleId || ''}
                 onChange={(e) => setSelectedRoleId(Number(e.target.value))}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
               >
-                {roles.map(role => (
-                  <option key={role.id} value={role.id}>
-                    {role.role_name} ({role.department})
-                  </option>
-                ))}
+                {roles.length === 0 ? (
+                  <option value="">No leadership positions found</option>
+                ) : (
+                  roles.map(role => (
+                    <option key={role.id} value={role.id}>
+                      {role.role_name} ({role.department})
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 
@@ -249,30 +274,38 @@ export const AIInsights = () => {
               <div className="sm:col-span-5">
                 <label className="block text-xs font-bold text-slate-700 mb-1">Unavailable Employee / Current Leader</label>
                 <select
-                  value={unavailEmpId}
+                  value={unavailEmpId || ''}
                   onChange={(e) => setUnavailEmpId(Number(e.target.value))}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
                 >
-                  {employees.map(emp => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.name} ({emp.designation} • {emp.availability_status})
-                    </option>
-                  ))}
+                  {employees.length === 0 ? (
+                    <option value="">No authorized employees found</option>
+                  ) : (
+                    employees.map(emp => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.name} ({emp.designation} • {emp.availability_status})
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
 
               <div className="sm:col-span-5">
                 <label className="block text-xs font-bold text-slate-700 mb-1">Vacant Leadership Position</label>
                 <select
-                  value={replacementRoleId}
+                  value={replacementRoleId || ''}
                   onChange={(e) => setReplacementRoleId(Number(e.target.value))}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
                 >
-                  {roles.map(role => (
-                    <option key={role.id} value={role.id}>
-                      {role.role_name} ({role.department})
-                    </option>
-                  ))}
+                  {roles.length === 0 ? (
+                    <option value="">No leadership positions found</option>
+                  ) : (
+                    roles.map(role => (
+                      <option key={role.id} value={role.id}>
+                        {role.role_name} ({role.department})
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
 
