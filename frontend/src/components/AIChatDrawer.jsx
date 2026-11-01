@@ -305,3 +305,4 @@ export const AIChatDrawer = ({ isManager = false }) => {
 };
 
 export default AIChatDrawer;
+

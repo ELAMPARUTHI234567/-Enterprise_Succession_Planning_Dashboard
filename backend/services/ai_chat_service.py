@@ -308,3 +308,4 @@ def handle_ai_chat_query(user_query, user=None, current_employee=None):
                 "Which roles need assessments scheduled?"
             ]
         }
+

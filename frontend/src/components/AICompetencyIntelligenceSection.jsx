@@ -189,3 +189,4 @@ export const AICompetencyIntelligenceSection = ({ managerId = null }) => {
 };
 
 export default AICompetencyIntelligenceSection;
+

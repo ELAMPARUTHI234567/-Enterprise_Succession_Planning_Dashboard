@@ -120,3 +120,4 @@ def get_hr_workforce_summary():
         "strategic_recommendations": recommendations,
         "governance_status": "Active & Verified"
     }
+

@@ -228,3 +228,4 @@ def ai_chat_route():
 
     result = handle_ai_chat_query(query, user=user, current_employee=employee)
     return jsonify(result), 200
+

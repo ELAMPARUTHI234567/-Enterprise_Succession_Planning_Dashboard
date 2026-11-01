@@ -606,3 +606,4 @@ export const AITop3SuccessorsSection = ({ isManager = false, onNavigateProfile }
 };
 
 export default AITop3SuccessorsSection;
+

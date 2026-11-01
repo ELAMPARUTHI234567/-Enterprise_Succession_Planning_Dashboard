@@ -198,3 +198,4 @@ def get_team_intelligence(manager_emp_id):
         "members": members_data,
         "ai_team_summary": ai_summary
     }
+
