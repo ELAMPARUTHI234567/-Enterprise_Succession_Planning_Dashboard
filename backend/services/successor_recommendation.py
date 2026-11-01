@@ -4,7 +4,7 @@ from extensions import db
 from models.employee import Employee
 from models.role import LeadershipRole
 from models.user import User
-from models.assessment import Assessment, AssessmentAssignment
+from models.assessment import Assessment, AssessmentAssignment, AssessmentResult
 from models.successor_shortlist import SuccessorShortlist
 from services.eligibility_service import evaluate_pre_assessment_eligibility
 from services.gap_service import calculate_competency_gaps
@@ -29,13 +29,50 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
     if not role:
         return {"success": False, "message": f"Leadership role with ID {role_id} not found", "data": None}
 
-    # 1. Scope Candidate Pool based on RBAC
+    # 1. Mandatory Pre-filter: Identify employees who have completed an assessment for this role
+    completed_assignments_query = db.session.query(
+        AssessmentAssignment.employee_id
+    ).join(
+        Assessment, AssessmentAssignment.assessment_id == Assessment.id
+    ).filter(
+        Assessment.role_id == role.id,
+        AssessmentAssignment.status == 'Completed'
+    ).join(
+        AssessmentResult, AssessmentAssignment.id == AssessmentResult.assignment_id
+    ).filter(
+        AssessmentResult.overall_score.isnot(None)
+    ).distinct()
+
+    completed_emp_ids = [row[0] for row in completed_assignments_query.all()]
+
+    if not completed_emp_ids:
+        return {
+            "success": True,
+            "role": {
+                "id": role.id,
+                "role_name": role.role_name,
+                "department": role.department,
+                "min_experience_years": getattr(role, 'min_experience_years', 5)
+            },
+            "total_evaluated": 0,
+            "total_eligible": 0,
+            "top_candidates": [],
+            "notice": (
+                f"No candidates currently satisfy all mandatory prerequisites and possess completed "
+                f"role-specific assessment results for {role.role_name}. Ineligible employees are excluded "
+                f"according to succession governance policy."
+            ),
+            "governance_note": "Evaluations strictly require active employment, prerequisite eligibility, and role-specific assessment completion."
+        }
+
+    # 2. Scope Candidate Pool based on RBAC among employees with completed assessments
     is_hr_or_admin = False
     if current_user and current_user.role.lower() in ['hr', 'admin']:
         is_hr_or_admin = True
 
     if manager_id:
         candidate_pool = Employee.query.filter(
+            Employee.id.in_(completed_emp_ids),
             Employee.manager_id == manager_id,
             Employee.availability_status != 'Unavailable'
         ).all()
@@ -60,12 +97,14 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
             }
 
         candidate_pool = Employee.query.filter(
+            Employee.id.in_(completed_emp_ids),
             Employee.manager_id == mgr_emp_id,
             Employee.availability_status != 'Unavailable'
         ).all()
     else:
-        # HR / Admin: Enterprise-wide pool
+        # HR / Admin: Enterprise-wide pool among candidates with completed assessment
         candidate_pool = Employee.query.filter(
+            Employee.id.in_(completed_emp_ids),
             Employee.availability_status != 'Unavailable'
         ).all()
 
@@ -388,3 +427,4 @@ def shortlist_candidate_for_role(employee_id, role_id, user_id=None, action='Sho
         "message": f"Successfully updated {emp.name} as {status_val} for {role.role_name}",
         "data": entry.to_dict()
     }
+
