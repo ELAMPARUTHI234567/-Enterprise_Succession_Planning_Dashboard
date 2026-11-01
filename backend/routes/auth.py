@@ -296,9 +296,9 @@ def supabase_login():
             if user.status != 'Active':
                 user.status = 'Active'
                 need_commit = True
-            allowed = trusted_info.get('allowed_roles', [trusted_info['default_role']])
-            if user.role not in allowed:
-                user.role = trusted_info['default_role']
+            default_role = trusted_info.get('default_role')
+            if default_role and user.role != default_role:
+                user.role = default_role
                 need_commit = True
             if not user.oauth_email or user.oauth_email.strip().lower() != email:
                 user.oauth_email = email

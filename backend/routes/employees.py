@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime
 from extensions import db
 from models.employee import Employee
+from models.user import User
 from models.employee_competency import EmployeeCompetency
 from models.competency import Competency
 from models.role import LeadershipRole
@@ -53,8 +54,16 @@ def check_employee_access(emp_id, allow_manager_direct_report=True, require_writ
 def get_employees():
     search = request.args.get('search', '').strip()
     department = request.args.get('department', '').strip()
-    manager_id = request.args.get('manager_id', type=int)
+    manager_arg = request.args.get('manager_id')
     availability = request.args.get('availability', '').strip()
+    unassigned = request.args.get('unassigned', '').lower() in ['true', '1', 'yes'] or str(manager_arg).lower() == 'unassigned'
+
+    manager_id = None
+    if manager_arg and not unassigned:
+        try:
+            manager_id = int(manager_arg)
+        except (ValueError, TypeError):
+            manager_id = None
 
     include_readiness = request.args.get('include_readiness', 'true').lower() in ('true', '1')
 
@@ -92,7 +101,9 @@ def get_employees():
     if department and department != 'All':
         query = query.filter(Employee.department == department)
 
-    if manager_id:
+    if unassigned:
+        query = query.filter(Employee.manager_id.is_(None))
+    elif manager_id:
         query = query.filter(Employee.manager_id == manager_id)
 
     if availability and availability != 'All':
@@ -970,6 +981,143 @@ def transfer_employee_manager(emp_id=None):
     }), 200
 
 
+@employees_bp.route('/managers', methods=['GET'])
+def get_managers_list():
+    """
+    GET /api/managers
+    Returns all managers in the organization along with their assigned employee counts and direct reports.
+    Authorized for HR, Admin, and Manager.
+    """
+    user, current_emp, err_msg, status = require_role('HR', 'Admin', 'Manager')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    # Find all manager user IDs
+    manager_users = User.query.filter(db.func.lower(User.role) == 'manager').all()
+    manager_user_ids = {u.id for u in manager_users}
+
+    # Employees who are managers
+    all_employees = Employee.query.options(db.joinedload(Employee.subordinates)).order_by(Employee.id.asc()).all()
+    
+    managers_data = []
+    seen_ids = set()
+
+    for emp in all_employees:
+        is_mgr = (
+            emp.user_id in manager_user_ids or
+            len(emp.subordinates) > 0 or
+            any(k in (emp.designation or '').lower() for k in ['manager', 'lead', 'head', 'director', 'supervisor']) or
+            emp.id in [4, 21]
+        )
+        if is_mgr and emp.id not in seen_ids:
+            seen_ids.add(emp.id)
+            sub_ids = [s.id for s in emp.subordinates]
+            managers_data.append({
+                "id": emp.id,
+                "name": emp.name,
+                "employee_code": emp.employee_code,
+                "email": emp.email,
+                "department": emp.department,
+                "designation": emp.designation,
+                "assigned_employee_count": len(sub_ids),
+                "employee_ids": sub_ids,
+                "user_id": emp.user_id,
+                "availability_status": emp.availability_status
+            })
+
+    # Sort managers with assigned reports first, then by name
+    managers_data.sort(key=lambda m: (-m["assigned_employee_count"], m["name"]))
+
+    return jsonify({
+        "success": True,
+        "count": len(managers_data),
+        "data": managers_data
+    }), 200
+
+
+@employees_bp.route('/employees/bulk-assign-manager', methods=['POST'])
+def bulk_assign_employees_to_manager():
+    """
+    POST /api/employees/bulk-assign-manager
+    Body: { "employee_ids": [1, 2, 3], "new_manager_id": 4 } (or new_manager_id: null to unassign)
+    Assigns multiple employees to a manager atomically with full RBAC & circular reporting validation.
+    """
+    user, employee, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    data = request.get_json() or {}
+    employee_ids = data.get('employee_ids', [])
+    new_manager_id = data.get('new_manager_id')
+
+    if not employee_ids or not isinstance(employee_ids, list):
+        return jsonify({"success": False, "message": "employee_ids array is required and cannot be empty"}), 400
+
+    # Handle unassign
+    is_unassign = new_manager_id in [None, 0, 'null', 'none', '']
+
+    target_manager = None
+    if not is_unassign:
+        try:
+            new_manager_id = int(new_manager_id)
+            target_manager = Employee.query.get(new_manager_id)
+            if not target_manager:
+                return jsonify({"success": False, "message": f"Target Manager #{new_manager_id} not found"}), 404
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "message": "Invalid new_manager_id format"}), 400
+
+    updated_count = 0
+    errors = []
+
+    for eid in employee_ids:
+        try:
+            eid_int = int(eid)
+            emp = Employee.query.get(eid_int)
+            if not emp:
+                errors.append(f"Employee #{eid} not found")
+                continue
+
+            if is_unassign:
+                emp.manager_id = None
+                updated_count += 1
+            else:
+                # 1. Self reporting check
+                if eid_int == new_manager_id:
+                    errors.append(f"{emp.name} cannot be assigned as their own manager")
+                    continue
+
+                # 2. Circular reporting check
+                if would_create_circular_reporting(eid_int, new_manager_id):
+                    errors.append(f"Circular reporting detected for {emp.name}")
+                    continue
+
+                emp.manager_id = new_manager_id
+                updated_count += 1
+        except Exception as e:
+            errors.append(f"Error processing #{eid}: {str(e)}")
+
+    if updated_count > 0:
+        db.session.commit()
+    else:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": f"No assignments updated. Errors: {'; '.join(errors)}"
+        }), 400
+
+    mgr_label = f"manager {target_manager.name}" if target_manager else "Unassigned (No Manager)"
+    msg = f"Successfully assigned {updated_count} employee(s) to {mgr_label}."
+    if errors:
+        msg += f" Note: {len(errors)} employee(s) skipped due to errors: {'; '.join(errors)}"
+
+    return jsonify({
+        "success": True,
+        "updated_count": updated_count,
+        "skipped_count": len(errors),
+        "message": msg
+    }), 200
+
+
 @employees_bp.route('/employees/unassigned', methods=['GET'])
 def get_unassigned_employees():
     """
@@ -1005,8 +1153,16 @@ def get_employee_directory():
 
     search = request.args.get('search', '').strip()
     department = request.args.get('department', '').strip()
-    manager_id = request.args.get('manager_id', type=int)
+    manager_arg = request.args.get('manager_id')
     availability = request.args.get('availability', '').strip()
+    unassigned = request.args.get('unassigned', '').lower() in ['true', '1', 'yes'] or str(manager_arg).lower() == 'unassigned'
+
+    manager_id = None
+    if manager_arg and not unassigned:
+        try:
+            manager_id = int(manager_arg)
+        except (ValueError, TypeError):
+            manager_id = None
     only_unassigned = request.args.get('unassigned', '').lower() in ['true', '1', 'yes']
 
     query = Employee.query

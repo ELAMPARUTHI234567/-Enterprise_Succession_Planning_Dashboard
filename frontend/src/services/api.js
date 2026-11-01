@@ -231,6 +231,12 @@ export const employeeService = {
   getExperienceSummary: (empId) => api.get(`/employees/${empId}/experience-summary`),
   getRoleSkillsSummary: (empId, roleId = 1) => api.get(`/employees/${empId}/roles/${roleId}/skills-summary`),
   getRoleAssessmentSummary: (empId, roleId = 1) => api.get(`/employees/${empId}/roles/${roleId}/assessment-summary`),
+
+  // Manager & Team Assignments
+  getManagers: () => api.get('/managers'),
+  bulkAssignManager: (data) => api.post('/employees/bulk-assign-manager', data),
+  assignManager: (empId, newMgrId, notes = '') => api.put(`/employees/${empId}/manager`, { new_manager_id: newMgrId, notes }),
+  getUnassigned: () => api.get('/employees/unassigned'),
 };
 
 export const roleService = {

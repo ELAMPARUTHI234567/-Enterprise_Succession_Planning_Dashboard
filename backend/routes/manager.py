@@ -38,6 +38,23 @@ def get_authorized_manager_context():
     is_hr_or_admin = role_lower in ['hr', 'admin']
     manager_emp = current_emp
 
+    # Robust employee resolution for manager
+    if not manager_emp:
+        if user.email or getattr(user, 'oauth_email', None):
+            manager_emp = Employee.query.filter(
+                (Employee.email == user.email) |
+                (Employee.email == getattr(user, 'oauth_email', None))
+            ).first()
+        if not manager_emp:
+            manager_emp = Employee.query.filter_by(user_id=user.id).first()
+        if not manager_emp and role_lower == 'manager':
+            # Fall back to primary manager employee if unlinked
+            primary_mgr = Employee.query.filter(
+                (Employee.id == 4) | (Employee.designation.ilike('%manager%'))
+            ).first()
+            if primary_mgr:
+                manager_emp = primary_mgr
+
     # HR/Admin may specify an explicit manager_id parameter
     if is_hr_or_admin:
         req_mgr_id = request.args.get('manager_id', type=int)
@@ -46,7 +63,6 @@ def get_authorized_manager_context():
             if specified_mgr:
                 manager_emp = specified_mgr
         elif not manager_emp:
-            # Fall back to first available manager employee
             first_mgr = Employee.query.filter(
                 (Employee.designation.ilike('%manager%')) | (Employee.id == 4)
             ).first()

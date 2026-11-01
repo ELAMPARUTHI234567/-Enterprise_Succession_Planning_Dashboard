@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Plus, Search, Filter, Eye, Edit2, Trash2, Loader2, CheckCircle2, AlertCircle, Clock, Check, X, UserCheck } from 'lucide-react';
+import { 
+  Users, Plus, Search, Filter, Eye, Edit2, Trash2, Loader2, CheckCircle2, 
+  AlertCircle, Clock, Check, X, UserCheck, UserPlus, ShieldCheck, ArrowRightLeft 
+} from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
 import { CompanyHierarchySection } from '../components/CompanyHierarchySection';
@@ -13,7 +16,17 @@ export const Employees = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [department, setDepartment] = useState('All');
+  const [managerFilter, setManagerFilter] = useState('All'); // 'All' | 'unassigned' | managerId
+  const [managers, setManagers] = useState([]);
+  const [selectedEmpIds, setSelectedEmpIds] = useState([]);
   const [error, setError] = useState('');
+
+  // Manager Assignment Modal State
+  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [assignTargetEmp, setAssignTargetEmp] = useState(null); // null if bulk, emp if single
+  const [targetManagerId, setTargetManagerId] = useState('');
+  const [assignSubmitting, setAssignSubmitting] = useState(false);
+  const [assignModalError, setAssignModalError] = useState('');
 
   // Pending Registrations State
   const [pendingUsers, setPendingUsers] = useState([]);
@@ -47,9 +60,16 @@ export const Employees = () => {
     setLoading(true);
     setError('');
     try {
-      const res = await employeeService.getAll({ search, department }, { signal });
+      const params = { search, department };
+      if (managerFilter === 'unassigned') {
+        params.unassigned = true;
+      } else if (managerFilter && managerFilter !== 'All') {
+        params.manager_id = managerFilter;
+      }
+
+      const res = await employeeService.getAll(params, { signal });
       if (res && res.success) {
-        setEmployees(res.data);
+        setEmployees(res.data || []);
       }
     } catch (err) {
       if (axios.isCancel(err) || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') {
@@ -61,6 +81,17 @@ export const Employees = () => {
       if (!signal || !signal.aborted) {
         setLoading(false);
       }
+    }
+  };
+
+  const fetchManagers = async () => {
+    try {
+      const res = await employeeService.getManagers();
+      if (res && res.success) {
+        setManagers(res.data || []);
+      }
+    } catch (err) {
+      console.warn('Could not load managers list:', err);
     }
   };
 
@@ -83,11 +114,88 @@ export const Employees = () => {
     const controller = new AbortController();
     fetchEmployees(controller.signal);
     fetchPendingRegistrations();
+    fetchManagers();
 
     return () => {
       controller.abort();
     };
-  }, [search, department]);
+  }, [search, department, managerFilter]);
+
+  const handleSelectAll = () => {
+    if (selectedEmpIds.length === employees.length) {
+      setSelectedEmpIds([]);
+    } else {
+      setSelectedEmpIds(employees.map(e => e.id));
+    }
+  };
+
+  const handleToggleSelectEmp = (id) => {
+    setSelectedEmpIds(prev => 
+      prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]
+    );
+  };
+
+  const handleOpenAssignModal = (emp = null) => {
+    setAssignTargetEmp(emp);
+    setTargetManagerId(emp?.manager_id ? String(emp.manager_id) : '');
+    setAssignModalError('');
+    setIsAssignModalOpen(true);
+  };
+
+  const handleAssignSubmit = async (e) => {
+    e.preventDefault();
+    setAssignSubmitting(true);
+    setAssignModalError('');
+    try {
+      const empIdsToAssign = assignTargetEmp ? [assignTargetEmp.id] : selectedEmpIds;
+      if (empIdsToAssign.length === 0) {
+        setAssignModalError('Please select at least one employee.');
+        setAssignSubmitting(false);
+        return;
+      }
+
+      const mgrVal = targetManagerId === 'null' || !targetManagerId ? null : Number(targetManagerId);
+      const res = await employeeService.bulkAssignManager({
+        employee_ids: empIdsToAssign,
+        new_manager_id: mgrVal
+      });
+
+      if (res && res.success) {
+        setActionSuccess(res.message || 'Manager assignment updated successfully!');
+        setIsAssignModalOpen(false);
+        setSelectedEmpIds([]);
+        setAssignTargetEmp(null);
+        await Promise.all([fetchEmployees(), fetchManagers()]);
+      } else {
+        setAssignModalError(res?.message || 'Failed to assign manager.');
+      }
+    } catch (err) {
+      setAssignModalError(err.message || 'An error occurred during manager assignment.');
+    } finally {
+      setAssignSubmitting(false);
+    }
+  };
+
+  const handleBulkUnassign = async () => {
+    if (selectedEmpIds.length === 0) return;
+    if (!window.confirm(`Unassign manager for ${selectedEmpIds.length} selected employee(s)?`)) return;
+    setSubmitting(true);
+    try {
+      const res = await employeeService.bulkAssignManager({
+        employee_ids: selectedEmpIds,
+        new_manager_id: null
+      });
+      if (res && res.success) {
+        setActionSuccess(res.message || 'Employees unassigned successfully.');
+        setSelectedEmpIds([]);
+        await Promise.all([fetchEmployees(), fetchManagers()]);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to unassign employees.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleApproveUser = async (userId, userName) => {
     setApprovingId(userId);
@@ -376,8 +484,8 @@ export const Employees = () => {
       )}
 
       {/* Filter and Search Toolbar */}
-      <div className="bg-white rounded-xl p-4 border border-slate-200/80 card-shadow flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="relative w-full sm:w-80">
+      <div className="bg-white rounded-xl p-4 border border-slate-200/80 card-shadow flex flex-col md:flex-row items-center justify-between gap-3">
+        <div className="relative w-full md:w-72">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
           <input
             type="text"
@@ -388,22 +496,87 @@ export const Employees = () => {
           />
         </div>
 
-        <div className="flex items-center space-x-3 w-full sm:w-auto">
-          <Filter className="w-4 h-4 text-slate-400" />
-          <span className="text-xs font-semibold text-slate-600">Department:</span>
-          <select
-            value={department}
-            onChange={(e) => setDepartment(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="All">All Departments</option>
-            <option value="Information Technology">Information Technology</option>
-            <option value="Engineering">Engineering</option>
-            <option value="Operations">Operations</option>
-            <option value="Human Resources">Human Resources</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+          <div className="flex items-center space-x-2">
+            <Filter className="w-4 h-4 text-slate-400" />
+            <span className="text-xs font-semibold text-slate-600">Department:</span>
+            <select
+              value={department}
+              onChange={(e) => setDepartment(e.target.value)}
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="All">All Departments</option>
+              <option value="Information Technology">Information Technology</option>
+              <option value="Engineering">Engineering</option>
+              <option value="Operations">Operations</option>
+              <option value="Human Resources">Human Resources</option>
+            </select>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <UserCheck className="w-4 h-4 text-slate-400" />
+            <span className="text-xs font-semibold text-slate-600">Manager:</span>
+            <select
+              value={managerFilter}
+              onChange={(e) => {
+                setManagerFilter(e.target.value);
+                setSelectedEmpIds([]);
+              }}
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="All">All Managers</option>
+              <option value="unassigned">⚠️ Unassigned (No Manager)</option>
+              {managers.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.assigned_employee_count} direct reports)
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
+
+      {/* Floating Batch Actions Bar */}
+      {selectedEmpIds.length > 0 && (
+        <div className="bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-xl border border-indigo-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center space-x-3">
+            <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-xs">
+              {selectedEmpIds.length}
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white">
+                {selectedEmpIds.length} employee{selectedEmpIds.length > 1 ? 's' : ''} selected
+              </p>
+              <p className="text-[10px] text-slate-300">Assign reporting manager or remove existing manager assignment</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => handleOpenAssignModal(null)}
+              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 transition shadow cursor-pointer"
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Assign to Manager</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleBulkUnassign}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-rose-900/60 text-slate-200 hover:text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Unassign Manager</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedEmpIds([])}
+              className="px-2.5 py-1.5 text-slate-400 hover:text-white text-xs font-medium cursor-pointer"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Employees Table */}
       <div className="bg-white rounded-xl border border-slate-200/80 card-shadow overflow-hidden">
@@ -417,9 +590,19 @@ export const Employees = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200/60">
                 <tr>
+                  <th className="px-4 py-3.5 text-center w-10">
+                    <input
+                      type="checkbox"
+                      checked={employees.length > 0 && selectedEmpIds.length === employees.length}
+                      onChange={handleSelectAll}
+                      className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                      title="Select / Deselect All"
+                    />
+                  </th>
                   <th className="px-6 py-3.5">Employee</th>
                   <th className="px-6 py-3.5">Department</th>
                   <th className="px-6 py-3.5">Designation</th>
+                  <th className="px-6 py-3.5">Reporting Manager</th>
                   <th className="px-6 py-3.5">Experience</th>
                   <th className="px-6 py-3.5">Performance Score</th>
                   <th className="px-6 py-3.5">Leadership Score</th>
@@ -429,7 +612,15 @@ export const Employees = () => {
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
                 {employees.map((emp) => (
-                  <tr key={emp.id} className="hover:bg-slate-50/80 transition-colors">
+                  <tr key={emp.id} className={`hover:bg-slate-50/80 transition-colors ${selectedEmpIds.includes(emp.id) ? 'bg-indigo-50/40' : ''}`}>
+                    <td className="px-4 py-4 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedEmpIds.includes(emp.id)}
+                        onChange={() => handleToggleSelectEmp(emp.id)}
+                        className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                      />
+                    </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center space-x-3">
                         <div className="w-8 h-8 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center">
@@ -443,6 +634,19 @@ export const Employees = () => {
                     </td>
                     <td className="px-6 py-4 text-slate-600">{emp.department}</td>
                     <td className="px-6 py-4 font-semibold text-slate-800">{emp.designation}</td>
+                    <td className="px-6 py-4">
+                      {emp.manager_name ? (
+                        <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-indigo-50 border border-indigo-200/80 rounded-lg text-indigo-800 font-bold text-xs">
+                          <UserCheck className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+                          <span>{emp.manager_name}</span>
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-extrabold rounded-lg">
+                          <AlertCircle className="w-3 h-3 text-amber-600 flex-shrink-0" />
+                          <span>Unassigned</span>
+                        </span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-slate-700">{emp.experience_years} Yrs</td>
                     <td className="px-6 py-4">
                       <span className="font-bold text-emerald-700">{emp.performance_score}%</span>
@@ -454,6 +658,13 @@ export const Employees = () => {
                       <StatusBadge status={emp.readiness_level} type="readiness" />
                     </td>
                     <td className="px-6 py-4 text-right space-x-1">
+                      <button
+                        onClick={() => handleOpenAssignModal(emp)}
+                        className="p-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50"
+                        title="Assign or Change Manager"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                      </button>
                       <button
                         onClick={() => navigate(`/employees/${emp.id}`)}
                         className="p-1.5 rounded-lg text-slate-600 hover:bg-slate-100"
@@ -483,6 +694,62 @@ export const Employees = () => {
           </div>
         )}
       </div>
+
+      {/* Assign Manager Modal */}
+      <Modal
+        isOpen={isAssignModalOpen}
+        onClose={() => setIsAssignModalOpen(false)}
+        title={assignTargetEmp ? `Assign Manager: ${assignTargetEmp.name}` : `Bulk Assign Manager (${selectedEmpIds.length} Employees)`}
+      >
+        {assignModalError && (
+          <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg font-medium">
+            {assignModalError}
+          </div>
+        )}
+        <form onSubmit={handleAssignSubmit} className="space-y-4">
+          <div>
+            <p className="text-xs text-slate-600 mb-2">
+              {assignTargetEmp ? (
+                <>Assign reporting manager for <strong className="text-slate-900">{assignTargetEmp.name}</strong> ({assignTargetEmp.employee_code} - {assignTargetEmp.designation}).</>
+              ) : (
+                <>Assign reporting manager for <strong className="text-slate-900">{selectedEmpIds.length} selected employees</strong>.</>
+              )}
+            </p>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Select Target Manager</label>
+            <select
+              value={targetManagerId}
+              onChange={(e) => setTargetManagerId(e.target.value)}
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              required
+            >
+              <option value="">-- Choose Manager --</option>
+              <option value="null">⚠️ Unassign (Remove Manager / Individual Contributor)</option>
+              {managers.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.department} • {m.assigned_employee_count} direct reports)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="pt-4 flex justify-end space-x-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsAssignModalOpen(false)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={assignSubmitting}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center space-x-2 shadow cursor-pointer disabled:opacity-50"
+            >
+              {assignSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Confirm Assignment</span>}
+            </button>
+          </div>
+        </form>
+      </Modal>
       </>
       )}
 

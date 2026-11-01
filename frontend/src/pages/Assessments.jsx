@@ -9,6 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import StatCard from '../components/StatCard';
 import AssessmentResultView from '../components/AssessmentResultView';
 import ManualAssessmentScheduler from '../components/ManualAssessmentScheduler';
+import AssessmentAssignmentEvaluation from '../components/AssessmentAssignmentEvaluation';
 import { assessmentService, roleService, competencyService, employeeService, questionBankService } from '../services/api';
 
 export const Assessments = () => {
@@ -558,6 +559,15 @@ export const Assessments = () => {
         {/* Action Navigation Tabs */}
         <div className="mt-4 md:mt-0 flex bg-slate-800/80 p-1 rounded-xl border border-slate-700/80 flex-wrap gap-1">
           <button
+            onClick={() => setActiveTab('assignment_evaluation')}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+              activeTab === 'assignment_evaluation' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5 text-indigo-300" />
+            <span>Assignment &amp; Evaluation Hub</span>
+          </button>
+          <button
             onClick={() => setActiveTab('results')}
             className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
               activeTab === 'results' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
@@ -625,6 +635,11 @@ export const Assessments = () => {
           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           <span>{successMsg}</span>
         </div>
+      )}
+
+      {/* TAB: HR ASSESSMENT ASSIGNMENT & EVALUATION (Module 3 & 4) */}
+      {activeTab === 'assignment_evaluation' && (
+        <AssessmentAssignmentEvaluation onRefresh={fetchData} />
       )}
 
       {/* TAB: MANUAL ASSESSMENT SCHEDULING (Module 5) */}
