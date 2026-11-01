@@ -258,7 +258,15 @@ def get_team_members():
     if err:
         return err
 
-    team_members = Employee.query.options(db.joinedload(Employee.manager)).filter_by(manager_id=mgr_emp.id).order_by(Employee.id.asc()).all()
+    team_members = Employee.query.options(
+        db.joinedload(Employee.manager),
+        db.selectinload(Employee.skills),
+        db.selectinload(Employee.competencies).joinedload(EmployeeCompetency.competency),
+        db.selectinload(Employee.projects),
+        db.selectinload(Employee.employment_history),
+        db.selectinload(Employee.assessment_assignments).joinedload(AssessmentAssignment.assessment),
+        db.selectinload(Employee.assessment_assignments).joinedload(AssessmentAssignment.result)
+    ).filter_by(manager_id=mgr_emp.id).order_by(Employee.id.asc()).all()
     team_ids = [e.id for e in team_members]
 
     # Pre-fetch tasks counts
@@ -302,6 +310,12 @@ def get_team_members():
                 "completed_at": r.completed_at.strftime('%Y-%m-%d') if r.completed_at else None
             }
 
+    # Pre-fetch performance reviews in batch (avoiding per-employee N+1 queries)
+    reviews = PerformanceReview.query.filter(PerformanceReview.employee_id.in_(team_ids)).all() if team_ids else []
+    reviews_by_emp = {}
+    for r in reviews:
+        reviews_by_emp.setdefault(r.employee_id, []).append(r.to_dict())
+
     data = []
     for emp in team_members:
         emp_dict = emp.to_dict()
@@ -313,7 +327,7 @@ def get_team_members():
         emp_dict["project_counts"] = p_stats
         emp_dict["latest_assessment"] = r_stats
 
-        # Comprehensive Direct Report Details (Section 3)
+        # Comprehensive Direct Report Details (loaded efficiently via selectinload)
         emp_dict["skills"] = [s.to_dict() for s in emp.skills]
         emp_dict["competencies"] = [
             {
@@ -328,7 +342,7 @@ def get_team_members():
         emp_dict["assessments"] = [a.to_dict() for a in emp.assessment_assignments]
         latest_assign = emp.assessment_assignments[-1] if emp.assessment_assignments else None
         emp_dict["latest_assignment_status"] = latest_assign.get_real_status() if latest_assign else "Not Scheduled"
-        emp_dict["performance_reviews"] = [r.to_dict() for r in PerformanceReview.query.filter_by(employee_id=emp.id).all()]
+        emp_dict["performance_reviews"] = reviews_by_emp.get(emp.id, [])
 
         data.append(emp_dict)
 
