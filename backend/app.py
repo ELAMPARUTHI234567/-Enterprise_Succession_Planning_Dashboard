@@ -11,7 +11,8 @@ from routes import (
     auth_bp, employees_bp, roles_bp, competencies_bp,
     assessments_bp, gap_analysis_bp, successors_bp,
     dashboard_bp, analytics_bp, ml_bp, reports_bp,
-    question_bank_bp, notifications_bp, manager_bp, vacancies_bp
+    question_bank_bp, notifications_bp, manager_bp, vacancies_bp,
+    ai_bp
 )
 
 def mask_db_uri(uri):
@@ -172,6 +173,7 @@ def create_app():
     app.register_blueprint(notifications_bp, url_prefix='/api')
     app.register_blueprint(manager_bp, url_prefix='/api/manager')
     app.register_blueprint(vacancies_bp, url_prefix='/api')
+    app.register_blueprint(ai_bp, url_prefix='/api')
 
     @app.route('/api', methods=['GET', 'OPTIONS'])
     @app.route('/api/health', methods=['GET', 'OPTIONS'])

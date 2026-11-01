@@ -19,6 +19,7 @@ from models.suitability_config import SuitabilityConfig
 from models.role_eligibility_config import RoleEligibilityConfig
 from models.notification import Notification
 from models.vacancy import ManagerVacancy, VacancyDecision
+from models.successor_shortlist import SuccessorShortlist
 from models.manager_dashboard import (
     TeamTask, TeamGoal, TeamIssue, ManagerFeedback, ManagerRecommendation, PerformanceReview
 )
@@ -38,6 +39,7 @@ __all__ = [
     "AssessmentResult",
     "QuestionBank",
     "SuccessorResult",
+    "SuccessorShortlist",
     "MLPrediction",
     "AIRecommendation",
     "EmployeeProject",

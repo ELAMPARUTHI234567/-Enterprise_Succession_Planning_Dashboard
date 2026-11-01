@@ -386,7 +386,31 @@ def run_schema_migrations(engine):
         else:
             print("[MIGRATION] Table 'vacancy_decisions' schema verified.")
 
-        # 17. Auditable verification of trusted administrative roles
+        # 17. Migrate successor_shortlists table
+        if 'successor_shortlists' not in tables:
+            with engine.begin() as conn:
+                conn.execute(text(f"""
+                    CREATE TABLE IF NOT EXISTS successor_shortlists (
+                        id {pk_type},
+                        employee_id INTEGER NOT NULL,
+                        role_id INTEGER NOT NULL,
+                        shortlisted_by INTEGER,
+                        status VARCHAR(50) DEFAULT 'Shortlisted',
+                        notes TEXT,
+                        ranking_score FLOAT,
+                        readiness_score FLOAT,
+                        assessment_score FLOAT,
+                        created_at {dt_type} DEFAULT CURRENT_TIMESTAMP,
+                        updated_at {dt_type} DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE,
+                        FOREIGN KEY (role_id) REFERENCES leadership_roles (id) ON DELETE CASCADE
+                    )
+                """))
+            print("[MIGRATION] Created 'successor_shortlists' table successfully.")
+        else:
+            print("[MIGRATION] Table 'successor_shortlists' schema verified.")
+
+        # 18. Auditable verification of trusted administrative roles
         audit_and_sync_trusted_users(engine)
 
         # 18. Create database performance indexes on critical lookup and foreign-key columns
@@ -433,6 +457,7 @@ def create_performance_indexes(engine):
         ("idx_assign_questions_assign_id", "assignment_questions", "assignment_id"),
         ("idx_assess_answers_assign_id", "assessment_answers", "assignment_id"),
         ("idx_assess_results_assign_id", "assessment_results", "assignment_id"),
+        ("idx_succ_short_role_emp", "successor_shortlists", "role_id, employee_id"),
     ]
 
     try:

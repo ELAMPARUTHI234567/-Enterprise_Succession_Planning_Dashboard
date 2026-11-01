@@ -346,6 +346,15 @@ export const analyticsService = {
 export const aiService = {
   getRecommendation: (employeeId, roleId = 1) => api.post('/ai/recommendation', { employee_id: employeeId, role_id: roleId }),
   getRoleReplacement: (employeeId, roleId = 1) => api.post('/ai/role-replacement', { employee_id: employeeId, role_id: roleId }),
+  getTopSuccessors: (roleId = 1) => api.get(`/ai/top-successors?role_id=${roleId}`),
+  getManagerTopSuccessors: (roleId = 1) => api.get(`/ai/manager/top-successors?role_id=${roleId}`),
+  compareCandidates: (roleId, candidateIds) => api.post('/ai/compare-candidates', { role_id: roleId, candidate_ids: candidateIds }),
+  shortlistCandidate: (employeeId, roleId, action = 'Shortlist', notes = '') => api.post('/ai/shortlist', { employee_id: employeeId, role_id: roleId, action, notes }),
+  getShortlists: (roleId = null) => api.get(`/ai/shortlists${roleId ? `?role_id=${roleId}` : ''}`),
+  getWorkforceSummary: () => api.get('/ai/workforce-summary'),
+  getCompetencyIntelligence: (managerId = null, department = null) => api.get(`/ai/competency-intelligence${managerId ? `?manager_id=${managerId}` : ''}${department ? `&department=${department}` : ''}`),
+  getTeamIntelligence: (managerId = null) => api.get(`/ai/team-intelligence${managerId ? `?manager_id=${managerId}` : ''}`),
+  sendChatQuery: (query) => api.post('/ai/chat', { query }),
 };
 
 export const mlService = {

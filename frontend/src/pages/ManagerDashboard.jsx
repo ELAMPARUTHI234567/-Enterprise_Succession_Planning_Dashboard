@@ -15,6 +15,10 @@ import TaskStatusChart from '../charts/TaskStatusChart';
 import ProjectProgressChart from '../charts/ProjectProgressChart';
 import AssessmentResultView from '../components/AssessmentResultView';
 import { CompanyHierarchySection } from '../components/CompanyHierarchySection';
+import AITop3SuccessorsSection from '../components/AITop3SuccessorsSection';
+import AIManagerTeamIntelligenceSection from '../components/AIManagerTeamIntelligenceSection';
+import AICompetencyIntelligenceSection from '../components/AICompetencyIntelligenceSection';
+import AIChatDrawer from '../components/AIChatDrawer';
 import { 
   authService, managerService, roleService, assessmentService 
 } from '../services/api';
@@ -818,6 +822,7 @@ export const ManagerDashboard = () => {
       <div className="bg-white rounded-2xl border border-slate-200/80 card-shadow p-2 flex flex-wrap gap-1.5 text-xs font-bold">
         {[
           { id: 'team', label: 'My Team', icon: Users, count: teamMembers.length },
+          { id: 'ai-intelligence', label: 'AI Succession & Risks', icon: Sparkles },
           { id: 'hierarchy', label: 'Team Hierarchy', icon: UserCheck },
           { id: 'tasks', label: 'Tasks & Projects', icon: CheckSquare, count: tasks.length },
           { id: 'goals', label: 'Team Goals', icon: Target, count: goals.length },
@@ -851,6 +856,22 @@ export const ManagerDashboard = () => {
           );
         })}
       </div>
+
+      {/* ========================================================================= */}
+      {/* TAB: AI SUCCESSION, TEAM INTELLIGENCE & RISKS */}
+      {/* ========================================================================= */}
+      {activeTab === 'ai-intelligence' && (
+        <div className="space-y-6 animate-fadeIn">
+          {/* Module 2: AI Top 3 Eligible Successors for Manager's Team */}
+          <AITop3SuccessorsSection isManager={true} onNavigateProfile={(empId) => navigate(`/employees/${empId}`)} />
+
+          {/* Modules 6 & 7: Manager Team Performance & Risk Intelligence */}
+          <AIManagerTeamIntelligenceSection />
+
+          {/* Module 3: Team Competency Gap Intelligence */}
+          <AICompetencyIntelligenceSection managerId={overview?.manager?.id} />
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* TAB 1: MY TEAM MEMBERS (SECTION 2 & 4) */}
@@ -1597,8 +1618,11 @@ export const ManagerDashboard = () => {
       {/* TAB 6: DYNAMIC LEADERSHIP RECOMMENDATIONS (SECTION 8) */}
       {/* ========================================================================= */}
       {activeTab === 'recommendations' && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 card-shadow overflow-hidden space-y-4 p-5">
-          <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-100 gap-3">
+        <div className="space-y-6">
+          <AITop3SuccessorsSection isManager={true} onNavigateProfile={(empId) => navigate(`/employees/${empId}`)} />
+
+          <div className="bg-white rounded-2xl border border-slate-200/80 card-shadow overflow-hidden space-y-4 p-5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-100 gap-3">
             <div>
               <div className="flex items-center space-x-2">
                 <Award className="w-4 h-4 text-indigo-600" />
@@ -1688,6 +1712,7 @@ export const ManagerDashboard = () => {
               </table>
             </div>
           )}
+          </div>
         </div>
       )}
 
@@ -2619,6 +2644,9 @@ export const ManagerDashboard = () => {
           </div>
         </div>
       )}
+
+      {/* Module 8: Floating AI Manager Chat Assistant */}
+      <AIChatDrawer isManager={true} />
     </div>
   );
 };

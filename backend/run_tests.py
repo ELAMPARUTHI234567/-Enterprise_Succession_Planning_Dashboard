@@ -155,10 +155,12 @@ def run_all():
     import test_manager_dashboard_dynamic
     import test_dashboard_assessment_fix
     import test_supabase_registration_apikey
+    import test_ai_workforce_intelligence
     manager_suite = unittest.TestLoader().loadTestsFromModule(test_manager_dashboard_dynamic)
     fix_suite = unittest.TestLoader().loadTestsFromModule(test_dashboard_assessment_fix)
     apikey_suite = unittest.TestLoader().loadTestsFromModule(test_supabase_registration_apikey)
-    all_tests = unittest.TestSuite([baseline_suite, role_suite, onboard_suite, submission_suite, manager_suite, fix_suite, apikey_suite])
+    ai_suite = unittest.TestLoader().loadTestsFromModule(test_ai_workforce_intelligence)
+    all_tests = unittest.TestSuite([baseline_suite, role_suite, onboard_suite, submission_suite, manager_suite, fix_suite, apikey_suite, ai_suite])
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(all_tests)
