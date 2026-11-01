@@ -11,6 +11,8 @@ from routes.ml import ml_bp
 from routes.reports import reports_bp
 from routes.question_bank import question_bank_bp
 from routes.notifications import notifications_bp
+from routes.manager import manager_bp
+from routes.vacancies import vacancies_bp
 
 __all__ = [
     "auth_bp",
@@ -25,5 +27,8 @@ __all__ = [
     "ml_bp",
     "reports_bp",
     "question_bank_bp",
-    "notifications_bp"
+    "notifications_bp",
+    "manager_bp",
+    "vacancies_bp"
 ]
+

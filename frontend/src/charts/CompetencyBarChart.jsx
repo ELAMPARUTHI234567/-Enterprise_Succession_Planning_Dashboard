@@ -5,18 +5,27 @@ import { Bar } from 'react-chartjs-2';
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 export const CompetencyBarChart = ({ labels = [], currentScores = [], requiredScores = [] }) => {
+  if (!labels || labels.length === 0 || (!currentScores.some(s => s > 0) && !requiredScores.some(s => s > 0))) {
+    return (
+      <div className="w-full h-72 flex flex-col items-center justify-center text-slate-400">
+        <p className="text-xs font-semibold text-slate-600">No competency scores available yet</p>
+        <p className="text-[11px] text-slate-400 mt-1">Competency evaluations will be plotted as assessments are completed.</p>
+      </div>
+    );
+  }
+
   const data = {
-    labels: labels.length > 0 ? labels : ['Leadership', 'Communication', 'Decision Making', 'Team Mgmt', 'Strategic', 'Problem Solving', 'Adaptability', 'Technical'],
+    labels: labels,
     datasets: [
       {
         label: 'Current Score',
-        data: currentScores.length > 0 ? currentScores : [78, 85, 72, 80, 70, 82, 85, 90],
+        data: currentScores,
         backgroundColor: 'rgba(99, 102, 241, 0.85)', // Indigo
         borderRadius: 6,
       },
       {
         label: 'Required Target',
-        data: requiredScores.length > 0 ? requiredScores : [90, 90, 85, 85, 85, 80, 80, 75],
+        data: requiredScores,
         backgroundColor: 'rgba(203, 213, 225, 0.7)', // Slate
         borderRadius: 6,
       },

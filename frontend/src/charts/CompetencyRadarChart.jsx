@@ -5,12 +5,21 @@ import { Radar } from 'react-chartjs-2';
 ChartJS.register(RadialLinearScale, PointElement, LineElement, Filler, Tooltip, Legend);
 
 export const CompetencyRadarChart = ({ labels = [], currentScores = [], requiredScores = [], employeeName = "Employee" }) => {
+  if (!labels || labels.length === 0 || (!currentScores.some(s => s > 0) && !requiredScores.some(s => s > 0))) {
+    return (
+      <div className="w-full h-72 flex flex-col items-center justify-center text-slate-400">
+        <p className="text-xs font-semibold text-slate-600">No competency radar data recorded</p>
+        <p className="text-[11px] text-slate-400 mt-1">Radar metrics will be calculated after assessment completion.</p>
+      </div>
+    );
+  }
+
   const data = {
-    labels: labels.length > 0 ? labels : ['Leadership', 'Communication', 'Decision Making', 'Team Mgmt', 'Strategic', 'Problem Solving', 'Adaptability', 'Technical'],
+    labels: labels,
     datasets: [
       {
         label: `${employeeName} Current`,
-        data: currentScores.length > 0 ? currentScores : [78, 85, 72, 80, 70, 82, 85, 90],
+        data: currentScores,
         backgroundColor: 'rgba(99, 102, 241, 0.25)',
         borderColor: 'rgba(99, 102, 241, 1)',
         borderWidth: 2,
@@ -18,7 +27,7 @@ export const CompetencyRadarChart = ({ labels = [], currentScores = [], required
       },
       {
         label: 'Target Requirement',
-        data: requiredScores.length > 0 ? requiredScores : [90, 90, 85, 85, 85, 80, 80, 75],
+        data: requiredScores,
         backgroundColor: 'rgba(239, 68, 68, 0.1)',
         borderColor: 'rgba(239, 68, 68, 0.8)',
         borderWidth: 1.5,

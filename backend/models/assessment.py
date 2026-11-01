@@ -114,13 +114,44 @@ class AssessmentAssignment(db.Model):
     submission_deadline = db.Column(db.DateTime, nullable=True)      # Backend-enforced submission deadline
     submitted_at = db.Column(db.DateTime, nullable=True)
     schedule_status = db.Column(db.String(30), default='Scheduled', nullable=True)
+    attempt_number = db.Column(db.Integer, default=1, nullable=True)
 
     assigner = db.relationship('User', foreign_keys=[assigned_by])
-    employee = db.relationship('Employee', backref='assessment_assignments')
+    employee = db.relationship('Employee', backref=db.backref('assessment_assignments', cascade="all, delete-orphan", passive_deletes=True))
     answers = db.relationship('AssessmentAnswer', backref='assignment', cascade="all, delete-orphan")
     result = db.relationship('AssessmentResult', backref='assignment', uselist=False, cascade="all, delete-orphan")
+    assigned_questions = db.relationship('AssignmentQuestion', backref='assignment', cascade="all, delete-orphan", order_by="AssignmentQuestion.order_index")
+
+    def get_real_status(self):
+        """
+        Calculates and returns the authoritative real-time assignment status:
+        - 'Completed': Assessment finished and result saved
+        - 'Submitted': Assessment answers submitted
+        - 'In Progress': Assessment actively started
+        - 'Expired': Scheduled window elapsed without submission
+        - 'Available': Current time is within the active testing window
+        - 'Scheduled': Future scheduled time window
+        """
+        if self.status == 'Completed':
+            return 'Completed'
+        if self.status == 'Submitted':
+            return 'Submitted'
+        if self.status in ['In Progress', 'In-Progress'] or self.actual_start_time:
+            return 'In Progress'
+
+        if self.scheduled_start_datetime and self.scheduled_end_datetime:
+            now_utc = datetime.utcnow()
+            if now_utc > self.scheduled_end_datetime:
+                return 'Expired'
+            elif now_utc >= self.scheduled_start_datetime:
+                return 'Available'
+            else:
+                return 'Scheduled'
+
+        return self.status or 'Scheduled'
 
     def to_dict(self):
+        real_st = self.get_real_status()
         return {
             "id": self.id,
             "assessment_id": self.assessment_id,
@@ -137,9 +168,12 @@ class AssessmentAssignment(db.Model):
             "assigned_by_name": self.assigner.name if self.assigner else "HR Manager",
             "assigned_date": self.assigned_date.isoformat() if self.assigned_date else None,
             "due_date": self.due_date or (self.assessment.due_date if self.assessment else "N/A"),
-            "status": self.status,
+            "status": real_st,
+            "raw_status": self.status,
+            "real_status": real_st,
             "instructions": self.instructions or "Please complete all scenario and competency questions before the due date.",
-            "question_count": len(self.assessment.questions) if self.assessment and self.assessment.questions else 0,
+            "question_count": len(self.assigned_questions) if self.assigned_questions else (len(self.assessment.questions) if self.assessment and self.assessment.questions else 0),
+            "attempt_number": self.attempt_number or 1,
             "scheduled_date": self.scheduled_date,
             "start_time": self.start_time,
             "duration_minutes": self.duration_minutes or (self.assessment.duration if self.assessment else 30),
@@ -150,7 +184,7 @@ class AssessmentAssignment(db.Model):
             "actual_start_time": (self.actual_start_time.isoformat() + "Z") if self.actual_start_time else None,
             "submission_deadline": (self.submission_deadline.isoformat() + "Z") if self.submission_deadline else None,
             "submitted_at": (self.submitted_at.isoformat() + "Z") if self.submitted_at else None,
-            "schedule_status": self.schedule_status or self.status,
+            "schedule_status": real_st,
             "result": self.result.to_dict() if self.result else None
         }
 
@@ -160,22 +194,36 @@ class AssessmentAnswer(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     assignment_id = db.Column(db.Integer, db.ForeignKey('assessment_assignments.id', ondelete='CASCADE'), nullable=False)
     question_id = db.Column(db.Integer, db.ForeignKey('assessment_questions.id', ondelete='CASCADE'), nullable=False)
+    assignment_question_id = db.Column(db.Integer, db.ForeignKey('assignment_questions.id', ondelete='CASCADE'), nullable=True)
     answer = db.Column(db.Text, nullable=False)
     score = db.Column(db.Float, default=0.0, nullable=False)
 
-    question = db.relationship('AssessmentQuestion')
+    question = db.relationship('AssessmentQuestion', foreign_keys=[question_id])
+    assignment_question = db.relationship('AssignmentQuestion', foreign_keys=[assignment_question_id])
 
     def to_dict(self):
+        q_text = (self.assignment_question.question if self.assignment_question else 
+                  (self.question.question if self.question else ""))
+        comp_id = (self.assignment_question.competency_id if self.assignment_question else 
+                   (self.question.competency_id if self.question else None))
+        comp_name = (self.assignment_question.competency.name if self.assignment_question and self.assignment_question.competency else 
+                     (self.question.competency.name if self.question and self.question.competency else ""))
+        max_sc = (self.assignment_question.max_score if self.assignment_question else 
+                  (self.question.max_score if self.question else 10.0))
+
         return {
             "id": self.id,
             "assignment_id": self.assignment_id,
-            "question_id": self.question_id,
-            "question_text": self.question.question if self.question else "",
-            "competency_id": self.question.competency_id if self.question else None,
-            "competency_name": self.question.competency.name if self.question and self.question.competency else "",
+            "question_id": self.assignment_question_id or self.question_id,
+            "template_question_id": self.question_id,
+            "assignment_question_id": self.assignment_question_id,
+            "question_bank_id": self.assignment_question.question_bank_id if self.assignment_question else None,
+            "question_text": q_text,
+            "competency_id": comp_id,
+            "competency_name": comp_name,
             "answer": self.answer,
             "score": self.score,
-            "max_score": self.question.max_score if self.question else 10.0
+            "max_score": max_sc
         }
 
 class AssessmentResult(db.Model):
@@ -208,3 +256,53 @@ class AssessmentResult(db.Model):
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "detail": self.get_detail()
         }
+
+class AssignmentQuestion(db.Model):
+    __tablename__ = 'assignment_questions'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    assignment_id = db.Column(db.Integer, db.ForeignKey('assessment_assignments.id', ondelete='CASCADE'), nullable=False)
+    question_bank_id = db.Column(db.Integer, db.ForeignKey('question_bank.id', ondelete='SET NULL'), nullable=True)
+    question = db.Column(db.Text, nullable=False)
+    question_type = db.Column(db.String(50), default='Multiple Choice', nullable=False)
+    competency_id = db.Column(db.Integer, db.ForeignKey('competencies.id', ondelete='SET NULL'), nullable=True)
+    max_score = db.Column(db.Float, default=10.0, nullable=False)
+    options_json = db.Column(db.Text, nullable=False) # JSON array of option dicts: [{"label": "A", "text": "..."}]
+    correct_answer = db.Column(db.String(10), nullable=False) # e.g. "A"
+    explanation = db.Column(db.Text, nullable=True)
+    difficulty = db.Column(db.String(20), default='Medium', nullable=False) # 'Easy', 'Medium', 'Hard'
+    order_index = db.Column(db.Integer, default=1, nullable=False)
+
+    competency = db.relationship('Competency')
+    question_bank_item = db.relationship('QuestionBank')
+
+    def set_options(self, options_list):
+        self.options_json = json.dumps(options_list or [])
+
+    def get_options(self):
+        if not self.options_json:
+            return []
+        try:
+            return json.loads(self.options_json)
+        except Exception:
+            return []
+
+    def to_dict(self, include_correct=False):
+        d = {
+            "id": self.id,
+            "assignment_id": self.assignment_id,
+            "question_bank_id": self.question_bank_id,
+            "question": self.question,
+            "question_type": self.question_type,
+            "competency_id": self.competency_id,
+            "competency_name": self.competency.name if self.competency else "General Leadership",
+            "max_score": self.max_score,
+            "options": self.get_options(),
+            "difficulty": self.difficulty,
+            "order_index": self.order_index
+        }
+        if include_correct:
+            d["correct_answer"] = self.correct_answer or ""
+            d["explanation"] = self.explanation or ""
+        return d
+

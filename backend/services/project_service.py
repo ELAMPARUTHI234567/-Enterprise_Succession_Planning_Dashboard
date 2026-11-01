@@ -44,12 +44,14 @@ def calculate_project_success_rate(project_data):
 
     return None
 
-def get_employee_projects_summary(employee_id):
+def get_employee_projects_summary(employee_id, projects=None):
     """
     Summarizes all projects for an employee, distinguishing self-reported
     from HR/Supervisor-verified outcomes and calculating composite project metrics.
     """
-    projects = EmployeeProject.query.filter_by(employee_id=employee_id).order_by(EmployeeProject.id.desc()).all()
+    if projects is None:
+        projects = EmployeeProject.query.filter_by(employee_id=employee_id).order_by(EmployeeProject.id.desc()).all()
+
     if not projects:
         return {
             "total_projects": 0,

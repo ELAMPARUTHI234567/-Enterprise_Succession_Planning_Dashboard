@@ -1,4 +1,5 @@
 from extensions import db
+from datetime import datetime, date
 from models.user import User
 from models.employee import Employee
 from models.role import LeadershipRole
@@ -8,6 +9,9 @@ from models.employee_competency import EmployeeCompetency
 from models.assessment import Assessment, AssessmentQuestion, AssessmentAssignment, AssessmentAnswer, AssessmentResult
 from models.successor_result import SuccessorResult
 from models.ml_prediction import MLPrediction
+from models.manager_dashboard import (
+    TeamTask, TeamGoal, TeamIssue, ManagerFeedback, ManagerRecommendation, PerformanceReview
+)
 import os
 from config import Config
 from utils.seed_question_bank import seed_question_bank
@@ -536,6 +540,129 @@ def seed_enhanced_modules_baseline():
                 db.session.add(h1)
             db.session.commit()
             print("[SUCCESS] Seeded baseline employment history.")
+
+        # Seed baseline Manager Dashboard records (Tasks, Goals, Issues, Feedback, Recommendations)
+        if TeamTask.query.count() == 0 and employees:
+            mgr = Employee.query.filter((Employee.id == 4) | (Employee.designation.ilike('%manager%'))).first()
+            if mgr:
+                mgr_id = mgr.id
+                team_emps = Employee.query.filter_by(manager_id=mgr_id).all()
+                if not team_emps:
+                    team_emps = employees[:4]
+
+                e1 = team_emps[0] if len(team_emps) > 0 else employees[0]
+                e2 = team_emps[1] if len(team_emps) > 1 else employees[1]
+                e3 = team_emps[2] if len(team_emps) > 2 else employees[2]
+                e4 = team_emps[3] if len(team_emps) > 3 else employees[3]
+
+                # Tasks
+                t1 = TeamTask(
+                    manager_id=mgr_id, employee_id=e1.id,
+                    title="Containerize Event Broker Service",
+                    description="Decompose monolith queue into isolated containerized pub/sub worker instances.",
+                    priority="Urgent", start_date="2026-09-01", due_date="2026-10-25",
+                    status="In Progress"
+                )
+                t2 = TeamTask(
+                    manager_id=mgr_id, employee_id=e2.id,
+                    title="Lead Architecture Review & Interface Sync",
+                    description="Coordinate weekly cross-team interface definition and API backward compatibility checks.",
+                    priority="High", start_date="2026-09-10", due_date="2026-10-30",
+                    status="Pending"
+                )
+                t3 = TeamTask(
+                    manager_id=mgr_id, employee_id=e3.id,
+                    title="Database Index Tuning for Real-Time Streaming",
+                    description="Benchmark and optimize composite index structures on event logs.",
+                    priority="Medium", start_date="2026-08-01", due_date="2026-09-15",
+                    status="Completed", completed_at=datetime.utcnow()
+                )
+                t4 = TeamTask(
+                    manager_id=mgr_id, employee_id=e4.id,
+                    title="Finalize SLA Benchmark Documentation",
+                    description="Compile comprehensive SLA verification reports for quarterly stakeholder review.",
+                    priority="High", start_date="2026-08-15", due_date="2026-09-30",
+                    status="Overdue"
+                )
+                db.session.add_all([t1, t2, t3, t4])
+
+                # Goals
+                g1 = TeamGoal(
+                    manager_id=mgr_id,
+                    title="Cloud Platform Microservices Milestone Delivery",
+                    description="Complete migration of all core ingestion endpoints to microservices with 99.9% uptime.",
+                    target_metric=100.0, current_metric=85.0, metric_unit="%",
+                    target_date="2026-11-15", status="On Track"
+                )
+                g2 = TeamGoal(
+                    manager_id=mgr_id,
+                    title="Complete Q3 Leadership Core Assessments",
+                    description="Ensure 100% of eligible team members complete role assessments and verify project milestones.",
+                    target_metric=100.0, current_metric=75.0, metric_unit="%",
+                    target_date="2026-10-31", status="On Track"
+                )
+                db.session.add_all([g1, g2])
+
+                # Issues
+                i1 = TeamIssue(
+                    manager_id=mgr_id, employee_id=e1.id,
+                    title="Third-party Identity Provider API Rate Limiting Blocker",
+                    description="OIDC token exchange rate limits reached during peak integration testing runs.",
+                    severity="High", status="Open"
+                )
+                i2 = TeamIssue(
+                    manager_id=mgr_id, employee_id=e2.id,
+                    title="Cross-Browser CSS Grid Layout Shift",
+                    description="Drawer rendering displaced in Safari mobile views during table expansion.",
+                    severity="Medium", status="Resolved",
+                    resolution_notes="Patched responsive styling with flex fallback.",
+                    resolved_at=datetime.utcnow()
+                )
+                db.session.add_all([i1, i2])
+
+                # Feedback
+                f1 = ManagerFeedback(
+                    manager_id=mgr_id, employee_id=e1.id,
+                    feedback_date="2026-09-15",
+                    strengths="Exceptional architectural vision, reliable delivery, and proactive cross-team technical leadership.",
+                    improvement_areas="Delegating lower-level code reviews to junior engineers to preserve focus on high-impact strategic initiatives.",
+                    development_plan="Pairing with Engineering Director on Q4 strategic roadmap.",
+                    follow_up_status="Completed", is_private=True
+                )
+                f2 = ManagerFeedback(
+                    manager_id=mgr_id, employee_id=e2.id,
+                    feedback_date="2026-10-01",
+                    strengths="Strong domain leadership, rigorous requirements verification, and effective junior engineer mentorship.",
+                    improvement_areas="Executive stakeholder presentations and business ROI metric articulation.",
+                    development_plan="Enrolled in executive communication workshop series.",
+                    follow_up_status="In Progress", is_private=True
+                )
+                db.session.add_all([f1, f2])
+
+                # Recommendations
+                target_role = LeadershipRole.query.filter_by(id=2).first() or LeadershipRole.query.first()
+                r1 = ManagerRecommendation(
+                    manager_id=mgr_id, employee_id=e1.id,
+                    role_id=target_role.id if target_role else 1,
+                    suitability_score=88.5, readiness_level="High",
+                    strengths_summary="Proven technical execution, verified project leadership, and strong analytical problem-solving.",
+                    development_needs="Budget allocation and cross-department resource negotiation.",
+                    recommendation_notes="Strongly recommend Arun Kumar for succession into Team Lead role. Demonstrates team leadership daily.",
+                    status="Submitted"
+                )
+                db.session.add(r1)
+
+                # Performance Review
+                pr1 = PerformanceReview(
+                    manager_id=mgr_id, employee_id=e1.id,
+                    rating=92.0, review_period="Annual 2026",
+                    review_notes="Exceeded all engineering benchmarks and mentored two engineers to promotion.",
+                    review_date="2026-09-30"
+                )
+                db.session.add(pr1)
+
+                db.session.commit()
+                print("[SUCCESS] Seeded baseline Manager Dashboard records (tasks, goals, issues, feedback, recommendations).")
 
     except Exception as e:
         db.session.rollback()

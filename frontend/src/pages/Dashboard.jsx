@@ -1,17 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Award, Sliders, TrendingUp, AlertTriangle, CheckCircle2, ArrowRight, RefreshCw, Cpu } from 'lucide-react';
+import { Users, Award, Sliders, TrendingUp, AlertTriangle, CheckCircle2, ArrowRight, RefreshCw, Cpu, Briefcase, UserCheck, ChevronDown, ChevronUp } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import StatusBadge from '../components/StatusBadge';
 import CompetencyBarChart from '../charts/CompetencyBarChart';
 import ReadinessPieChart from '../charts/ReadinessPieChart';
 import GapAnalysisChart from '../charts/GapAnalysisChart';
+import { CompanyHierarchySection } from '../components/CompanyHierarchySection';
 import { dashboardService } from '../services/api';
 
 export const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState('');
+  const [showHierarchy, setShowHierarchy] = useState(false);
   const navigate = useNavigate();
 
   const fetchDashboardData = async () => {
@@ -22,10 +24,18 @@ export const Dashboard = () => {
       if (res.success && res.data) {
         setSummary(res.data);
       } else {
-        setError(res.message || 'Failed to load dashboard data');
+        const rawMsg = res.message || '';
+        const userFriendlyMsg = /sql|database|psycopg2|anon_1|programmingerror|column/i.test(rawMsg)
+          ? 'Unable to load enterprise dashboard analytics. Please retry or contact administrator.'
+          : (rawMsg || 'Failed to load dashboard data');
+        setError(userFriendlyMsg);
       }
     } catch (err) {
-      setError(err.message || 'Unable to connect to the server. Please check the backend connection.');
+      const rawMsg = err.message || '';
+      const userFriendlyMsg = /sql|database|psycopg2|anon_1|programmingerror|column/i.test(rawMsg)
+        ? 'A database error occurred while loading dashboard analytics. Please retry.'
+        : (rawMsg || 'Unable to connect to the server. Please check the backend connection.');
+      setError(userFriendlyMsg);
     } finally {
       setLoading(false);
     }
@@ -81,18 +91,52 @@ export const Dashboard = () => {
             Real-time automated evaluation of leadership potential, competency gaps, experience scaling, and ML readiness predictions.
           </p>
         </div>
-        <button
-          onClick={() => navigate('/assessments')}
-          className="mt-4 md:mt-0 px-4 py-2.5 bg-white text-indigo-900 hover:bg-indigo-50 font-bold rounded-xl text-xs shadow-lg transition-all flex items-center space-x-2"
-        >
-          <span>+ New Assessment</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
+        <div className="flex flex-wrap items-center gap-2 mt-4 md:mt-0">
+          <button
+            onClick={() => navigate('/successors')}
+            className="px-3.5 py-2 bg-indigo-500/30 hover:bg-indigo-500/50 text-white font-bold rounded-xl text-xs transition-all flex items-center space-x-1.5 border border-indigo-400/40"
+          >
+            <Briefcase className="w-3.5 h-3.5 text-purple-300" />
+            <span>Managerial Vacancies</span>
+          </button>
+          <button
+            onClick={() => setShowHierarchy(!showHierarchy)}
+            className="px-3.5 py-2 bg-indigo-500/30 hover:bg-indigo-500/50 text-white font-bold rounded-xl text-xs transition-all flex items-center space-x-1.5 border border-indigo-400/40"
+          >
+            <UserCheck className="w-3.5 h-3.5 text-emerald-300" />
+            <span>{showHierarchy ? 'Hide Org Hierarchy' : 'Org Hierarchy'}</span>
+          </button>
+          <button
+            onClick={() => navigate('/assessments')}
+            className="px-4 py-2 bg-white text-indigo-900 hover:bg-indigo-50 font-bold rounded-xl text-xs shadow-lg transition-all flex items-center space-x-2"
+          >
+            <span>+ New Assessment</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {error && (
         <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium rounded-xl">
           {error}
+        </div>
+      )}
+
+      {showHierarchy && (
+        <div className="bg-white p-5 rounded-2xl border border-indigo-200 card-shadow space-y-3 animate-in fade-in">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 className="text-base font-extrabold text-slate-900 flex items-center space-x-2">
+              <UserCheck className="w-5 h-5 text-indigo-600" />
+              <span>Enterprise Reporting Hierarchy &amp; Management Span</span>
+            </h3>
+            <button
+              onClick={() => setShowHierarchy(false)}
+              className="text-xs text-slate-400 hover:text-slate-600 font-bold px-2 py-1 rounded-lg hover:bg-slate-100"
+            >
+              ✕ Close
+            </button>
+          </div>
+          <CompanyHierarchySection isHR={true} />
         </div>
       )}
 

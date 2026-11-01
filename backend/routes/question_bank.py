@@ -363,18 +363,30 @@ def create_assessment_from_question_bank():
     assignment_dict = None
     if employee_id:
         emp = Employee.query.get(employee_id)
-        if emp:
-            assignment = AssessmentAssignment(
-                assessment_id=new_assessment.id,
-                employee_id=emp.id,
-                assigned_by=user.id,
-                due_date=due_date or new_assessment.due_date,
-                status="Assigned",
-                instructions=f"Complete all {len(qb_questions)} multiple choice questions for target role: {role.role_name}."
-            )
-            db.session.add(assignment)
-            db.session.flush()
-            assignment_dict = assignment.to_dict()
+        if not emp:
+            return jsonify({"success": False, "message": f"Target employee ID #{employee_id} not found"}), 404
+
+        from services.eligibility_service import evaluate_pre_assessment_eligibility
+        elig = evaluate_pre_assessment_eligibility(employee_id, role.id, employee=emp)
+        if not elig or not elig.get("is_eligible"):
+            unmet_text = "; ".join(elig.get("unmet_requirements", [])) if elig else "Pre-assessment role prerequisites not met"
+            return jsonify({
+                "success": False,
+                "message": f"Pre-assessment eligibility check failed: Employee '{emp.name}' is not eligible for this leadership assessment. Reason(s): {unmet_text}",
+                "eligibility": elig
+            }), 422
+
+        assignment = AssessmentAssignment(
+            assessment_id=new_assessment.id,
+            employee_id=emp.id,
+            assigned_by=user.id,
+            due_date=due_date or new_assessment.due_date,
+            status="Assigned",
+            instructions=f"Complete all {len(qb_questions)} multiple choice questions for target role: {role.role_name}."
+        )
+        db.session.add(assignment)
+        db.session.flush()
+        assignment_dict = assignment.to_dict()
 
     db.session.commit()
 

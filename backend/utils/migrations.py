@@ -9,6 +9,12 @@ def run_schema_migrations(engine):
         inspector = inspect(engine)
         tables = inspector.get_table_names()
 
+        is_pg = engine.dialect.name == 'postgresql'
+        pk_type = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        dt_type = "TIMESTAMP" if is_pg else "DATETIME"
+        bool_false = "DEFAULT FALSE" if is_pg else "DEFAULT 0"
+        bool_true = "DEFAULT TRUE" if is_pg else "DEFAULT 1"
+
         # 1. Migrate assessment_questions table
         if 'assessment_questions' in tables:
             columns = [c['name'] for c in inspector.get_columns('assessment_questions')]
@@ -67,29 +73,35 @@ def run_schema_migrations(engine):
                 ('duration_minutes', 'INTEGER'),
                 ('end_time', 'VARCHAR(10)'),
                 ('time_zone', 'VARCHAR(50)'),
-                ('scheduled_start_datetime', 'DATETIME'),
-                ('scheduled_end_datetime', 'DATETIME'),
-                ('actual_start_time', 'DATETIME'),
-                ('submission_deadline', 'DATETIME'),
-                ('submitted_at', 'DATETIME'),
+                ('scheduled_start_datetime', dt_type),
+                ('scheduled_end_datetime', dt_type),
+                ('actual_start_time', dt_type),
+                ('submission_deadline', dt_type),
+                ('submitted_at', dt_type),
                 ('schedule_status', 'VARCHAR(30)'),
                 ('attempt_number', 'INTEGER DEFAULT 1')
             ]
             for col_name, col_type in new_aa_cols:
                 if col_name not in aa_columns:
                     print(f"[MIGRATION] Adding missing '{col_name}' column to 'assessment_assignments' table...")
-                    with engine.begin() as conn:
-                        conn.execute(text(f"ALTER TABLE assessment_assignments ADD COLUMN {col_name} {col_type}"))
-                    print(f"[MIGRATION] Column '{col_name}' added successfully to 'assessment_assignments'.")
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(f"ALTER TABLE assessment_assignments ADD COLUMN {col_name} {col_type}"))
+                        print(f"[MIGRATION] Column '{col_name}' added successfully to 'assessment_assignments'.")
+                    except Exception as col_err:
+                        print(f"[MIGRATION] Notice: Could not add column '{col_name}' to 'assessment_assignments': {str(col_err)}")
 
         # 5b. Migrate assessment_answers table
         if 'assessment_answers' in tables:
             ans_columns = [c['name'] for c in inspector.get_columns('assessment_answers')]
             if 'assignment_question_id' not in ans_columns:
                 print("[MIGRATION] Adding missing 'assignment_question_id' column to 'assessment_answers' table...")
-                with engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE assessment_answers ADD COLUMN assignment_question_id INTEGER"))
-                print("[MIGRATION] Column 'assignment_question_id' added successfully to 'assessment_answers'.")
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE assessment_answers ADD COLUMN assignment_question_id INTEGER"))
+                    print("[MIGRATION] Column 'assignment_question_id' added successfully to 'assessment_answers'.")
+                except Exception as col_err:
+                    print(f"[MIGRATION] Notice: Could not add column 'assignment_question_id' to 'assessment_answers': {str(col_err)}")
 
         # 6. Migrate role_eligibility_configs table
         if 'role_eligibility_configs' in tables:
@@ -99,51 +111,49 @@ def run_schema_migrations(engine):
                 ('min_company_tenure_months', 'FLOAT DEFAULT 6.0'),
                 ('min_project_success_rate', 'FLOAT DEFAULT 60.0'),
                 ('min_verified_projects', 'INTEGER DEFAULT 1'),
-                ('require_verified_projects', 'BOOLEAN DEFAULT 0'),
+                ('require_verified_projects', f'BOOLEAN {bool_false}'),
                 ('min_skill_match_pct', 'FLOAT DEFAULT 50.0'),
-                ('require_all_mandatory_skills', 'BOOLEAN DEFAULT 1'),
+                ('require_all_mandatory_skills', f'BOOLEAN {bool_true}'),
                 ('min_competency_score', 'FLOAT DEFAULT 60.0'),
                 ('min_evidence_coverage_pct', 'FLOAT DEFAULT 40.0'),
                 ('updated_by', 'INTEGER'),
-                ('created_at', 'DATETIME'),
-                ('updated_at', 'DATETIME')
+                ('created_at', dt_type),
+                ('updated_at', dt_type)
             ]
             for col_name, col_type in new_rec_cols:
                 if col_name not in rec_columns:
                     print(f"[MIGRATION] Adding missing '{col_name}' column to 'role_eligibility_configs' table...")
-                    with engine.begin() as conn:
-                        conn.execute(text(f"ALTER TABLE role_eligibility_configs ADD COLUMN {col_name} {col_type}"))
-                    print(f"[MIGRATION] Column '{col_name}' added successfully to 'role_eligibility_configs'.")
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(f"ALTER TABLE role_eligibility_configs ADD COLUMN {col_name} {col_type}"))
+                        print(f"[MIGRATION] Column '{col_name}' added successfully to 'role_eligibility_configs'.")
+                    except Exception as col_err:
+                        print(f"[MIGRATION] Notice: Could not add column '{col_name}' to 'role_eligibility_configs': {str(col_err)}")
         else:
             # Create table if not present
             with engine.begin() as conn:
-                conn.execute(text("""
+                conn.execute(text(f"""
                     CREATE TABLE IF NOT EXISTS role_eligibility_configs (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id {pk_type},
                         role_id INTEGER UNIQUE NOT NULL,
                         min_experience_years FLOAT DEFAULT 2.0,
                         min_company_tenure_months FLOAT DEFAULT 6.0,
                         min_project_success_rate FLOAT DEFAULT 60.0,
                         min_verified_projects INTEGER DEFAULT 1,
-                        require_verified_projects BOOLEAN DEFAULT 0,
+                        require_verified_projects BOOLEAN {bool_false},
                         min_skill_match_pct FLOAT DEFAULT 50.0,
-                        require_all_mandatory_skills BOOLEAN DEFAULT 1,
+                        require_all_mandatory_skills BOOLEAN {bool_true},
                         min_competency_score FLOAT DEFAULT 60.0,
                         min_evidence_coverage_pct FLOAT DEFAULT 40.0,
                         updated_by INTEGER,
-                        created_at DATETIME,
-                        updated_at DATETIME,
+                        created_at {dt_type},
+                        updated_at {dt_type},
                         FOREIGN KEY (role_id) REFERENCES leadership_roles (id) ON DELETE CASCADE
                     )
                 """))
             print("[MIGRATION] Created 'role_eligibility_configs' table successfully.")
 
         # 7. Migrate assignment_questions table
-        is_pg = engine.dialect.name == 'postgresql'
-        pk_type = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
-        dt_type = "TIMESTAMP" if is_pg else "DATETIME"
-        bool_false = "DEFAULT FALSE" if is_pg else "DEFAULT 0"
-        bool_true = "DEFAULT TRUE" if is_pg else "DEFAULT 1"
 
         if 'assignment_questions' not in tables:
             with engine.begin() as conn:

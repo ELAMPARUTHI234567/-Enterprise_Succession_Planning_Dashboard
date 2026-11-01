@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Plus, Search, Filter, Eye, Edit2, Trash2, Loader2, CheckCircle2, AlertCircle, Clock, Check, X } from 'lucide-react';
+import { Users, Plus, Search, Filter, Eye, Edit2, Trash2, Loader2, CheckCircle2, AlertCircle, Clock, Check, X, UserCheck } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
+import { CompanyHierarchySection } from '../components/CompanyHierarchySection';
 import { employeeService, authService } from '../services/api';
 import axios from 'axios';
 
 export const Employees = () => {
+  const [activeTab, setActiveTab] = useState('directory'); // 'directory' | 'hierarchy'
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -249,9 +251,42 @@ export const Employees = () => {
         </div>
       )}
 
-      {/* Pending Employee Approvals Panel */}
-      {pendingUsers.length > 0 && (
-        <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4 animate-in fade-in slide-in-from-top-2">
+      {/* View Switcher: Directory vs Reporting Hierarchy */}
+      <div className="flex items-center space-x-2 border-b border-slate-200 pb-2">
+        <button
+          onClick={() => setActiveTab('directory')}
+          className={`px-4 py-2 rounded-xl text-xs font-black flex items-center space-x-2 transition-all ${
+            activeTab === 'directory'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" />
+          <span>Workforce Directory ({employees.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('hierarchy')}
+          className={`px-4 py-2 rounded-xl text-xs font-black flex items-center space-x-2 transition-all ${
+            activeTab === 'hierarchy'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <UserCheck className="w-3.5 h-3.5 text-indigo-400" />
+          <span>Manager Reporting Hierarchy</span>
+        </button>
+      </div>
+
+      {activeTab === 'hierarchy' && (
+        <CompanyHierarchySection isHR={true} />
+      )}
+
+      {activeTab === 'directory' && (
+        <>
+          {/* Pending Employee Approvals Panel */}
+          {pendingUsers.length > 0 && (
+            <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4 animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2.5">
               <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold flex-shrink-0">
@@ -448,6 +483,8 @@ export const Employees = () => {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Add Employee Modal */}
       <Modal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} title="Add New Employee">

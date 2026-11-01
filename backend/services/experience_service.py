@@ -59,7 +59,7 @@ def merge_overlapping_intervals(intervals):
 
     return merged
 
-def calculate_employee_experience(employee_id):
+def calculate_employee_experience(employee_id, employee=None, histories=None):
     """
     Calculates detailed employment experience:
     1. Current company tenure (joining date to current date)
@@ -68,7 +68,8 @@ def calculate_employee_experience(employee_id):
     4. Domain experience breakdown
     5. Verified vs Self-Reported experience tracking
     """
-    employee = Employee.query.get(employee_id)
+    if employee is None:
+        employee = Employee.query.get(employee_id)
     if not employee:
         return None
 
@@ -85,7 +86,8 @@ def calculate_employee_experience(employee_id):
             tenure_years = max(0.0, round(tenure_days / 365.25, 2))
 
     # 2. Previous Employment History
-    histories = EmploymentHistory.query.filter_by(employee_id=employee_id).all()
+    if histories is None:
+        histories = EmploymentHistory.query.filter_by(employee_id=employee_id).all()
 
     all_intervals = []
     verified_intervals = []

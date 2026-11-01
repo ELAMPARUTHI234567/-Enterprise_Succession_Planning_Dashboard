@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from extensions import db
-from models.assessment import Assessment, AssessmentQuestion, AssessmentAssignment, AssessmentAnswer, AssessmentResult
+from models.assessment import Assessment, AssessmentQuestion, AssessmentAssignment, AssessmentAnswer, AssessmentResult, AssignmentQuestion
+from models.question_bank import QuestionBank
 from models.ml_prediction import MLPrediction
 from models.employee import Employee
 from models.role import LeadershipRole
@@ -9,6 +10,8 @@ from models.competency import Competency
 from services.gap_service import calculate_competency_gaps
 from services.readiness_service import calculate_successor_readiness
 from services.ml_service import run_ml_readiness_prediction
+from services.eligibility_service import evaluate_pre_assessment_eligibility
+from services.suitability_service import evaluate_leadership_suitability
 from utils.auth_middleware import get_current_user, require_role
 from datetime import datetime, timedelta
 from models.notification import Notification
@@ -116,6 +119,20 @@ def assign_assessment(assessment_id):
         if emp_target.manager_id != employee.id and emp_target.id != employee.id:
             return jsonify({"success": False, "message": "Access forbidden: Managers can only assign assessments to direct reports."}), 403
 
+    # Enforce Pre-Assessment Eligibility Check
+    target_role_id = assessment.role_id if assessment.role_id else 1
+    elig = evaluate_pre_assessment_eligibility(employee_id, target_role_id, employee=emp_target)
+    if not elig or not elig.get("is_eligible"):
+        unmet_text = "; ".join(elig.get("unmet_requirements", [])) if elig else "Pre-assessment role prerequisites not met"
+        return jsonify({
+            "success": False,
+            "message": f"Pre-assessment eligibility check failed: Employee '{emp_target.name}' is not eligible for this leadership assessment. Reason(s): {unmet_text}",
+            "eligibility": elig,
+            "data": {
+                "eligibility_evaluation": elig
+            }
+        }), 422
+
     existing = AssessmentAssignment.query.filter_by(
         assessment_id=assessment_id, employee_id=employee_id
     ).filter(AssessmentAssignment.status != 'Completed').first()
@@ -127,15 +144,30 @@ def assign_assessment(assessment_id):
             "message": "Assessment already assigned to this employee"
         }), 200
 
+    prior_count = db.session.query(db.func.count(AssessmentAssignment.id)).filter(
+        AssessmentAssignment.assessment_id == assessment_id,
+        AssessmentAssignment.employee_id == employee_id
+    ).scalar() or 0
+
     assignment = AssessmentAssignment(
         assessment_id=assessment_id,
         employee_id=employee_id,
         assigned_by=assigned_by,
         due_date=due_date,
         status="Assigned",
-        instructions=instructions
+        instructions=instructions,
+        attempt_number=prior_count + 1
     )
     db.session.add(assignment)
+    db.session.flush()
+
+    # Generate and persist fresh role-specific questions for this attempt
+    from services.question_generator_service import generate_and_persist_attempt_questions
+    success_q, res_q, code_q = generate_and_persist_attempt_questions(assignment, target_role_id)
+    if not success_q:
+        db.session.rollback()
+        return jsonify({"success": False, "message": res_q}), code_q
+
     db.session.commit()
 
     return jsonify({
@@ -199,7 +231,10 @@ def get_my_results():
                 answers = AssessmentAnswer.query.filter_by(assignment_id=a.id).all()
                 if answers:
                     total_score = sum(ans.score for ans in answers)
-                    total_possible = sum(ans.question.max_score for ans in answers if ans.question)
+                    total_possible = sum(
+                        (ans.assignment_question.max_score if ans.assignment_question else (ans.question.max_score if ans.question else 10.0))
+                        for ans in answers
+                    )
                 else:
                     total_score = rdata.get("overall_score", 80.0)
                     total_possible = 100.0
@@ -274,36 +309,46 @@ def get_assignment_detail(assignment_id):
             if not employee or assignment.employee_id != employee.id:
                 return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's assessment"}), 403
 
+            # Phase 3: Enforce backend timing window on question access (with early window check)
+            can_access, reason, status_code = check_assessment_start_permission(
+                assignment, current_user_employee_id=employee.id, is_admin=False
+            )
+            if not can_access:
+                return jsonify({"success": False, "message": reason}), status_code
+
     data = assignment.to_dict()
-    all_questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).order_by(AssessmentQuestion.order_index.asc()).all()
-    
-    # Requirement 1 & 16: Return ONLY MCQ questions for employee assessment
-    mcq_questions = [q for q in all_questions if q.question_type and q.question_type.lower() in ['multiple choice', 'mcq']]
-    
-    # Requirement 9 & 10: Format MCQ questions and strip correct_answer for security
-    formatted_questions = []
-    labels = ["A", "B", "C", "D", "E", "F"]
-    for q in mcq_questions:
-        q_dict = q.to_dict()
-        q_dict.pop('correct_answer', None) # Security: hide correct answer from frontend
-        q_dict['question_type'] = 'mcq'
-        
-        raw_options = q.get_options()
-        formatted_options = []
-        for idx, opt in enumerate(raw_options):
-            if isinstance(opt, dict):
-                formatted_options.append(opt)
-            elif isinstance(opt, str):
-                opt_str = opt.strip()
-                if len(opt_str) >= 3 and opt_str[0] in "ABCDEF" and opt_str[1:3] in [". ", ") "]:
-                    lbl = opt_str[0]
-                    txt = opt_str[3:].strip()
-                else:
-                    lbl = labels[idx] if idx < len(labels) else str(idx + 1)
-                    txt = opt_str
-                formatted_options.append({"label": lbl, "text": txt})
-        q_dict['options'] = formatted_options
-        formatted_questions.append(q_dict)
+
+    # Phase 3 Question Retrieval: Use attempt-specific assigned_questions if present
+    if assignment.assigned_questions and len(assignment.assigned_questions) > 0:
+        formatted_questions = [q.to_dict(include_correct=False) for q in assignment.assigned_questions]
+    else:
+        # Fallback to legacy assessment.questions
+        all_questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).order_by(AssessmentQuestion.order_index.asc()).all()
+        mcq_questions = [q for q in all_questions if q.question_type and q.question_type.lower() in ['multiple choice', 'mcq']]
+        formatted_questions = []
+        labels = ["A", "B", "C", "D", "E", "F"]
+        for q in mcq_questions:
+            q_dict = q.to_dict()
+            q_dict.pop('correct_answer', None) # Security: hide correct answer from frontend
+            q_dict.pop('explanation', None)
+            q_dict['question_type'] = 'mcq'
+            
+            raw_options = q.get_options()
+            formatted_options = []
+            for idx, opt in enumerate(raw_options):
+                if isinstance(opt, dict):
+                    formatted_options.append(opt)
+                elif isinstance(opt, str):
+                    opt_str = opt.strip()
+                    if len(opt_str) >= 3 and opt_str[0] in "ABCDEF" and opt_str[1:3] in [". ", ") "]:
+                        lbl = opt_str[0]
+                        txt = opt_str[3:].strip()
+                    else:
+                        lbl = labels[idx] if idx < len(labels) else str(idx + 1)
+                        txt = opt_str
+                    formatted_options.append({"label": lbl, "text": txt})
+            q_dict['options'] = formatted_options
+            formatted_questions.append(q_dict)
 
     data["questions"] = formatted_questions
     data["question_count"] = len(formatted_questions)
@@ -350,11 +395,20 @@ def submit_assessment(assignment_id):
 
     data = request.get_json() or {}
     answers_input = data.get('answers', {})
+    if not isinstance(answers_input, dict):
+        return jsonify({"success": False, "message": "Answers must be a key-value mapping of question IDs to selected answers."}), 400
 
-    all_questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).all()
-    # Filter to MCQ questions only
-    mcq_questions = [q for q in all_questions if q.question_type and q.question_type.lower() in ['multiple choice', 'mcq']]
-    valid_q_map = {q.id: q for q in mcq_questions}
+    # Phase 3: Evaluate against attempt-specific assigned_questions if present
+    assigned_qs = assignment.assigned_questions
+    if assigned_qs and len(assigned_qs) > 0:
+        questions_to_grade = assigned_qs
+        is_assigned_model = True
+    else:
+        all_questions = AssessmentQuestion.query.filter_by(assessment_id=assignment.assessment_id).all()
+        questions_to_grade = [q for q in all_questions if q.question_type and q.question_type.lower() in ['multiple choice', 'mcq']]
+        is_assigned_model = False
+
+    valid_q_map = {q.id: q for q in questions_to_grade}
 
     # Requirement 16: Validate submitted question IDs
     for q_id_str in answers_input.keys():
@@ -371,7 +425,7 @@ def submit_assessment(assignment_id):
 
     AssessmentAnswer.query.filter_by(assignment_id=assignment_id).delete()
 
-    for q in mcq_questions:
+    for q in questions_to_grade:
         user_ans_raw = str(answers_input.get(str(q.id)) or answers_input.get(q.id) or "").strip()
         max_sc = q.max_score
         total_possible += max_sc
@@ -391,9 +445,55 @@ def submit_assessment(assignment_id):
 
         total_achieved += achieved
 
+        if is_assigned_model:
+            target_assignment_question_id = q.id
+            
+            # Step 1: Look for an AssessmentQuestion in the current assignment's assessment template matching question text
+            resolved_aq = AssessmentQuestion.query.filter_by(
+                assessment_id=assignment.assessment_id,
+                question=q.question
+            ).first()
+
+            # Step 2: If not found in current assessment, search across any assessment template for matching question text
+            if not resolved_aq:
+                resolved_aq = AssessmentQuestion.query.filter_by(question=q.question).first()
+
+            # Step 3: Check by QuestionBank item text if question_bank_id is present
+            if not resolved_aq and getattr(q, 'question_bank_id', None):
+                qb_item = QuestionBank.query.get(q.question_bank_id)
+                if qb_item:
+                    resolved_aq = (AssessmentQuestion.query.filter_by(
+                        assessment_id=assignment.assessment_id,
+                        question=qb_item.question_text
+                    ).first() or AssessmentQuestion.query.filter_by(question=qb_item.question_text).first())
+
+            # Step 4: If still not found, safely create a template AssessmentQuestion for this assessment
+            # so NOT NULL and FOREIGN KEY constraints in SQLite and PostgreSQL are strictly maintained.
+            if not resolved_aq:
+                resolved_aq = AssessmentQuestion(
+                    assessment_id=assignment.assessment_id,
+                    question=q.question,
+                    question_type=q.question_type or 'Multiple Choice',
+                    competency_id=q.competency_id,
+                    max_score=q.max_score or 10.0,
+                    options_json=q.options_json,
+                    correct_answer=q.correct_answer,
+                    explanation=q.explanation,
+                    difficulty=q.difficulty or 'Medium',
+                    order_index=q.order_index or 1
+                )
+                db.session.add(resolved_aq)
+                db.session.flush()
+
+            target_question_id = resolved_aq.id
+        else:
+            target_question_id = q.id
+            target_assignment_question_id = None
+
         ans_record = AssessmentAnswer(
             assignment_id=assignment_id,
-            question_id=q.id,
+            question_id=target_question_id,
+            assignment_question_id=target_assignment_question_id,
             answer=user_ans_raw,
             score=achieved
         )
@@ -544,6 +644,29 @@ def get_assessment_results():
 
         completed_assignments = query.order_by(AssessmentAssignment.id.desc()).all()
 
+        latest_only_param = request.args.get('latest_only', 'true').strip().lower() in ['true', '1', 'yes']
+        by_candidate_param = request.args.get('by_candidate', 'false').strip().lower() in ['true', '1', 'yes']
+
+        # Group duplicate attempts by (employee_id, assessment_id) to pick the latest valid completed attempt
+        if latest_only_param or by_candidate_param:
+            attempts_map = {}
+            for a in completed_assignments:
+                key = (a.employee_id, a.assessment_id)
+                curr_time = a.submitted_at or (a.result.completed_at if a.result else None)
+                if key not in attempts_map:
+                    attempts_map[key] = a
+                else:
+                    prev_a = attempts_map[key]
+                    prev_time = prev_a.submitted_at or (prev_a.result.completed_at if prev_a.result else None)
+                    if curr_time and prev_time:
+                        if curr_time > prev_time:
+                            attempts_map[key] = a
+                    elif curr_time and not prev_time:
+                        attempts_map[key] = a
+                    elif a.id > prev_a.id:
+                        attempts_map[key] = a
+            completed_assignments = list(attempts_map.values())
+
         results_list = []
         for a in completed_assignments:
             if not a.result:
@@ -554,6 +677,7 @@ def get_assessment_results():
             rdata["employee_id"] = a.employee_id
             rdata["employee_name"] = a.employee.name if a.employee else ""
             rdata["employee_code"] = a.employee.employee_code if a.employee else ""
+            rdata["email"] = a.employee.email if a.employee else ""
             rdata["department"] = a.employee.department if a.employee else ""
             rdata["designation"] = a.employee.designation if a.employee else ""
             rdata["assessment_id"] = a.assessment_id
@@ -561,6 +685,7 @@ def get_assessment_results():
             rdata["role_id"] = a.assessment.role_id if a.assessment else 1
             rdata["role_name"] = a.assessment.role.role_name if a.assessment and a.assessment.role else ""
             rdata["submission_date"] = a.result.completed_at.isoformat() if a.result.completed_at else None
+            rdata["status"] = a.status
 
             detail = rdata.get("detail", {})
             total_score = detail.get("_total_score")
@@ -570,13 +695,22 @@ def get_assessment_results():
                 answers = AssessmentAnswer.query.filter_by(assignment_id=a.id).all()
                 if answers:
                     total_score = sum(ans.score for ans in answers)
-                    total_possible = sum(ans.question.max_score for ans in answers if ans.question)
+                    total_possible = sum(
+                        (ans.assignment_question.max_score if ans.assignment_question else (ans.question.max_score if ans.question else 10.0))
+                        for ans in answers
+                    )
                 else:
                     total_score = rdata.get("overall_score", 80.0)
                     total_possible = 100.0
 
-            rdata["total_score"] = round(total_score, 2)
-            rdata["total_possible"] = round(total_possible, 2)
+            total_sc_num = float(total_score)
+            total_poss_num = float(total_possible) if float(total_possible) > 0 else 100.0
+            norm_pct = round((total_sc_num / total_poss_num * 100.0), 2)
+
+            rdata["total_score"] = round(total_sc_num, 2)
+            rdata["total_possible"] = round(total_poss_num, 2)
+            rdata["normalized_percentage"] = norm_pct
+            rdata["overall_score"] = norm_pct
 
             target_role_id = a.assessment.role_id if a.assessment else 1
             gaps = calculate_competency_gaps(a.employee_id, target_role_id)
@@ -613,7 +747,95 @@ def get_assessment_results():
             rdata["development_areas"] = dev_areas
             rdata["strengths"] = strengths
 
+            # Pre-assessment eligibility and evidence enrichment
+            pre_elig = evaluate_pre_assessment_eligibility(a.employee_id, target_role_id, employee=a.employee)
+            cand_suit = evaluate_leadership_suitability(a.employee_id, target_role_id, employee=a.employee)
+
+            rdata["pre_assessment_eligibility"] = pre_elig
+            rdata["pre_assessment_status"] = pre_elig.get("status") if pre_elig else "Not Evaluated"
+            rdata["is_pre_assessment_eligible"] = pre_elig.get("is_eligible") if pre_elig else False
+            rdata["pre_assessment_reasons"] = pre_elig.get("reasons", []) if pre_elig else []
+            rdata["unmet_requirements"] = pre_elig.get("unmet_requirements", []) if pre_elig else []
+
+            rdata["suitability_score"] = cand_suit.get("suitability_score") if cand_suit else None
+            rdata["suitability_level"] = cand_suit.get("suitability", {}).get("suitability_level") or (cand_suit.get("suitability_level") if cand_suit else "Medium")
+            rdata["evidence_coverage_pct"] = cand_suit.get("evidence_coverage_pct", 0.0) if cand_suit else 0.0
+            rdata["project_summary"] = cand_suit.get("project_summary", {}) if cand_suit else {}
+            rdata["skill_details"] = cand_suit.get("skill_details", {}) if cand_suit else {}
+            rdata["experience_summary"] = cand_suit.get("experience_summary", {}) if cand_suit else {}
+            rdata["is_mandatory_eligible"] = cand_suit.get("is_mandatory_eligible", True) if cand_suit else True
+            rdata["missing_mandatory"] = cand_suit.get("criteria_scores", {}).get("skills", {}).get("missing_mandatory", []) if cand_suit else []
+
             results_list.append(rdata)
+
+        # Standard competition rank calculation with honest tie-handling
+        # Sort numerically by normalized_percentage descending
+        results_list.sort(key=lambda x: x["normalized_percentage"], reverse=True)
+
+        current_rank = 1
+        for idx, res in enumerate(results_list):
+            if idx > 0 and res["normalized_percentage"] < results_list[idx - 1]["normalized_percentage"]:
+                current_rank = idx + 1
+            res["assessment_rank"] = current_rank
+            res["is_highest_scorer"] = (current_rank == 1 and res["normalized_percentage"] > 0)
+
+        # Count completed assessments per employee across the organization
+        emp_counts = {}
+        for r in results_list:
+            eid = r["employee_id"]
+            emp_counts[eid] = emp_counts.get(eid, 0) + 1
+        for r in results_list:
+            r["completed_assessments_count"] = emp_counts.get(r["employee_id"], 1)
+
+        # If aggregated candidate view requested
+        if by_candidate_param:
+            by_emp = {}
+            for r in results_list:
+                eid = r["employee_id"]
+                if eid not in by_emp:
+                    by_emp[eid] = {
+                        "employee_id": eid,
+                        "employee_name": r["employee_name"],
+                        "employee_code": r["employee_code"],
+                        "email": r["email"],
+                        "department": r["department"],
+                        "designation": r["designation"],
+                        "role_id": r["role_id"],
+                        "role_name": r["role_name"],
+                        "assessment_name": r["assessment_title"],
+                        "total_score": r["total_score"],
+                        "total_possible": r["total_possible"],
+                        "normalized_percentage": r["normalized_percentage"],
+                        "overall_score": r["normalized_percentage"],
+                        "status": "Completed",
+                        "completed_assessments_count": 1,
+                        "submission_date": r["submission_date"],
+                        "readiness_level": r.get("readiness_level", "Medium"),
+                        "attempts": [r]
+                    }
+                else:
+                    rec = by_emp[eid]
+                    rec["attempts"].append(r)
+                    rec["completed_assessments_count"] += 1
+                    rec["total_score"] = round(rec["total_score"] + r["total_score"], 2)
+                    rec["total_possible"] = round(rec["total_possible"] + r["total_possible"], 2)
+                    rec["assessment_name"] += f", {r['assessment_title']}"
+                    # Aggregate normalized percentage across relevant completed assessments
+                    avg_norm = round(sum(att["normalized_percentage"] for att in rec["attempts"]) / len(rec["attempts"]), 1)
+                    rec["normalized_percentage"] = avg_norm
+                    rec["overall_score"] = avg_norm
+
+            candidate_summaries = list(by_emp.values())
+            candidate_summaries.sort(key=lambda x: x["normalized_percentage"], reverse=True)
+            c_rank = 1
+            for idx, c_res in enumerate(candidate_summaries):
+                if idx > 0 and c_res["normalized_percentage"] < candidate_summaries[idx - 1]["normalized_percentage"]:
+                    c_rank = idx + 1
+                c_res["assessment_rank"] = c_rank
+                c_res["computed_rank"] = c_rank
+                c_res["is_highest_scorer"] = (c_rank == 1 and c_res["normalized_percentage"] > 0)
+                c_res["is_highest"] = (c_rank == 1 and c_res["normalized_percentage"] > 0)
+            return jsonify({"success": True, "data": candidate_summaries}), 200
 
         return jsonify({"success": True, "data": results_list}), 200
     except Exception as e:
@@ -663,7 +885,10 @@ def get_assessment_result(assignment_id):
         answers = AssessmentAnswer.query.filter_by(assignment_id=assignment_id).all()
         if answers:
             total_score = sum(ans.score for ans in answers)
-            total_possible = sum(ans.question.max_score for ans in answers if ans.question)
+            total_possible = sum(
+                (ans.assignment_question.max_score if ans.assignment_question else (ans.question.max_score if ans.question else 10.0))
+                for ans in answers
+            )
         else:
             total_score = data.get("overall_score", 80.0)
             total_possible = 100.0
@@ -747,7 +972,7 @@ def check_conflicts():
 
 @assessments_bp.route('/assessment-schedules/batch-save', methods=['POST'])
 def batch_save_schedules():
-    user, _, err_msg, status = require_role('HR', 'Admin')
+    user, employee, err_msg, status = require_role('HR', 'Admin', 'Manager')
     if err_msg:
         return jsonify({"success": False, "message": err_msg}), status
 
@@ -796,8 +1021,53 @@ def batch_save_schedules():
     if not assessment_id:
         return jsonify({"success": False, "message": "Assessment ID or target leadership role is required"}), 400
 
+    # Phase 3 Unified Batch Scheduling: HR / Manager provides:
+    if not schedules or not isinstance(schedules, list):
+        emp_ids = (
+            data.get('employee_ids') or 
+            data.get('selected_employee_ids') or 
+            data.get('target_employee_ids') or 
+            data.get('employees')
+        )
+        sc_date = str(data.get('scheduled_date') or data.get('date') or '').strip()
+        st_time = str(data.get('start_time') or '').strip()
+        end_time = str(data.get('end_time') or '').strip()
+        dur_val = data.get('duration_minutes') if data.get('duration_minutes') is not None else data.get('duration')
+        tz_val = str(data.get('time_zone') or 'IST (Asia/Kolkata)').strip()
+        inst_val = str(data.get('instructions') or '').strip()
+
+        if emp_ids and isinstance(emp_ids, list) and len(emp_ids) > 0:
+            schedules = []
+            for eid in emp_ids:
+                schedules.append({
+                    "employee_id": eid,
+                    "scheduled_date": sc_date,
+                    "start_time": st_time,
+                    "end_time": end_time if end_time else None,
+                    "duration_minutes": dur_val,
+                    "time_zone": tz_val,
+                    "instructions": inst_val
+                })
+
     if not schedules or not isinstance(schedules, list):
         return jsonify({"success": False, "message": "Schedules list is required and cannot be empty"}), 400
+
+    # Strict Scope Enforcement for Managers:
+    if user.role.lower() == 'manager':
+        mgr_emp = employee
+        if not mgr_emp:
+            return jsonify({"success": False, "message": "Manager profile not associated with account"}), 404
+        for s in schedules:
+            if isinstance(s, dict):
+                eid = s.get('employee_id')
+                if eid:
+                    target_emp = Employee.query.get(eid)
+                    if not target_emp or target_emp.manager_id != mgr_emp.id:
+                        return jsonify({
+                            "success": False,
+                            "message": "Access forbidden: Managers may only schedule assessments for their authorized direct reports."
+                        }), 403
+
 
     global_tz = str(data.get('time_zone') or 'IST (Asia/Kolkata)').strip()
     for s in schedules:

@@ -4,8 +4,15 @@ from models.role import LeadershipRole
 from models.role_competency import RoleCompetency
 from models.competency import Competency
 from models.role_required_skill import RoleRequiredSkill
+from models.employee import Employee
 from models.suitability_config import SuitabilityConfig
-from services.suitability_service import compare_candidates_for_role
+from services.suitability_service import compare_candidates_for_role, evaluate_leadership_suitability
+from services.eligibility_service import (
+    get_role_eligibility_config,
+    update_role_eligibility_config,
+    get_pre_assessment_candidates_for_role,
+    evaluate_pre_assessment_eligibility
+)
 from utils.auth_middleware import get_current_user, require_role
 
 roles_bp = Blueprint('roles', __name__)
@@ -227,20 +234,224 @@ def delete_role_required_skill(role_id, skill_id):
 # MODULE 4: HR CANDIDATE COMPARISON & SUITABILITY SCORING
 # ==========================================================
 
+@roles_bp.route('/roles/<int:role_id>/eligibility-config', methods=['GET'])
+def get_role_eligibility(role_id):
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    config = get_role_eligibility_config(role_id)
+    if not config:
+        return jsonify({"success": False, "message": "Leadership role not found"}), 404
+
+    cfg_dict = config.to_dict()
+    return jsonify({"success": True, "data": {"config": cfg_dict, **cfg_dict}}), 200
+
+@roles_bp.route('/roles/<int:role_id>/eligibility-config', methods=['PUT'])
+def update_role_eligibility(role_id):
+    user, _, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    data = request.get_json() or {}
+    config, err, code = update_role_eligibility_config(role_id, data, user_id=user.id)
+    if err:
+        return jsonify({"success": False, "message": err}), code
+
+    cfg_dict = config.to_dict()
+    return jsonify({
+        "success": True,
+        "data": {"config": cfg_dict, **cfg_dict},
+        "message": "Role-specific pre-assessment eligibility thresholds updated successfully."
+    }), 200
+
+@roles_bp.route('/roles/<int:role_id>/pre-assessment-candidates', methods=['GET'])
+def get_role_pre_assessment_candidates(role_id):
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    candidates_data = get_pre_assessment_candidates_for_role(
+        role_id, current_user=user, current_employee=employee
+    )
+    if not candidates_data:
+        return jsonify({"success": False, "message": "Leadership role not found"}), 404
+
+    return jsonify({"success": True, "data": candidates_data}), 200
+
 @roles_bp.route('/roles/<int:role_id>/candidates-comparison', methods=['GET'])
 def get_candidates_comparison(role_id):
-    user, _, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
     if err_msg:
         return jsonify({"success": False, "message": err_msg}), status
 
     sort_by = request.args.get('sort_by', 'suitability_score')
     min_coverage = float(request.args.get('min_coverage', 0.0))
+    meets_readiness_param = request.args.get('meets_readiness', 'false').lower() in ['true', '1', 'yes']
 
-    result = compare_candidates_for_role(role_id, sort_by=sort_by, min_coverage=min_coverage)
+    result = compare_candidates_for_role(
+        role_id, 
+        sort_by=sort_by, 
+        min_coverage=min_coverage,
+        current_user=user,
+        current_employee=employee,
+        meets_readiness=meets_readiness_param
+    )
     if not result:
         return jsonify({"success": False, "message": "Role not found"}), 404
 
     return jsonify({"success": True, "data": result}), 200
+
+@roles_bp.route('/roles/<int:role_id>/candidates/<int:employee_id>/dossier', methods=['GET'])
+def get_candidate_dossier(role_id, employee_id):
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    # Enforce RBAC data isolation
+    if user.role.lower() == 'manager' and employee:
+        emp_obj = Employee.query.get(employee_id)
+        if not emp_obj or (emp_obj.manager_id != employee.id and emp_obj.id != employee.id):
+            return jsonify({"success": False, "message": "Access forbidden: Managers can only view direct reports"}), 403
+    elif user.role.lower() == 'employee' and employee:
+        if employee.id != employee_id:
+            return jsonify({"success": False, "message": "Access forbidden: Employees can only view their own dossier"}), 403
+
+    dossier = evaluate_leadership_suitability(employee_id, role_id)
+    if not dossier:
+        return jsonify({"success": False, "message": "Candidate or role not found"}), 404
+
+    return jsonify({"success": True, "data": dossier}), 200
+
+@roles_bp.route('/roles/<int:role_id>/assessment-scores', methods=['GET'])
+@roles_bp.route('/roles/<int:role_id>/assessment-summary', methods=['GET'])
+def get_role_assessment_scores(role_id):
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    comparison = compare_candidates_for_role(role_id, sort_by='assessment_score', current_user=user, current_employee=employee)
+    if not comparison:
+        return jsonify({"success": False, "message": "Leadership role not found"}), 404
+
+    summary = {
+        "role_id": comparison["role_id"],
+        "role_name": comparison["role_name"],
+        "highest_assessment_scorer": comparison.get("highest_assessment_scorer"),
+        "candidates": [
+            {
+                "employee_id": c["employee_id"],
+                "employee_name": c["employee_name"],
+                "employee_code": c["employee_code"],
+                "email": c["email"],
+                "department": c["department"],
+                "designation": c["designation"],
+                "assessment_score": c["assessment_score"],
+                "assessment_marks": c["assessment_marks"],
+                "assessment_max_marks": c["assessment_max_marks"],
+                "assessment_name": c["assessment_name"],
+                "assessment_status": c["assessment_status"],
+                "completed_assessments_count": c["completed_assessments_count"],
+                "assessment_rank": c["assessment_rank"],
+                "is_highest_assessment_scorer": c.get("is_highest_assessment_scorer", False),
+                "attempts": c.get("criteria_scores", {}).get("assessments", {}).get("attempts", [])
+            }
+            for c in comparison["candidates"]
+        ]
+    }
+    return jsonify({"success": True, "data": summary}), 200
+
+@roles_bp.route('/roles/<int:role_id>/projects-summary', methods=['GET'])
+def get_role_projects_summary(role_id):
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    comparison = compare_candidates_for_role(role_id, sort_by='projects', current_user=user, current_employee=employee)
+    if not comparison:
+        return jsonify({"success": False, "message": "Leadership role not found"}), 404
+
+    summary = {
+        "role_id": comparison["role_id"],
+        "role_name": comparison["role_name"],
+        "highest_project_performer": comparison.get("highest_project_performer"),
+        "candidates": [
+            {
+                "employee_id": c["employee_id"],
+                "employee_name": c["employee_name"],
+                "employee_code": c["employee_code"],
+                "department": c["department"],
+                "designation": c["designation"],
+                "project_score": c["project_score"],
+                "has_verified_projects": c["has_verified_projects"],
+                "is_highest_project_performer": c.get("is_highest_project_performer", False),
+                "project_summary": c.get("project_summary", {})
+            }
+            for c in comparison["candidates"]
+        ]
+    }
+    return jsonify({"success": True, "data": summary}), 200
+
+@roles_bp.route('/roles/<int:role_id>/skills-summary', methods=['GET'])
+def get_role_skills_summary(role_id):
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    comparison = compare_candidates_for_role(role_id, sort_by='skills', current_user=user, current_employee=employee)
+    if not comparison:
+        return jsonify({"success": False, "message": "Leadership role not found"}), 404
+
+    summary = {
+        "role_id": comparison["role_id"],
+        "role_name": comparison["role_name"],
+        "best_skill_matcher": comparison.get("best_skill_matcher"),
+        "candidates": [
+            {
+                "employee_id": c["employee_id"],
+                "employee_name": c["employee_name"],
+                "employee_code": c["employee_code"],
+                "department": c["department"],
+                "designation": c["designation"],
+                "skill_score": c["skill_score"],
+                "is_best_skill_matcher": c.get("is_best_skill_matcher", False),
+                "missing_mandatory": c.get("missing_mandatory", []),
+                "is_mandatory_eligible": c.get("is_mandatory_eligible", True),
+                "skill_details": c.get("skill_details", {})
+            }
+            for c in comparison["candidates"]
+        ]
+    }
+    return jsonify({"success": True, "data": summary}), 200
+
+@roles_bp.route('/roles/<int:role_id>/experience-summary', methods=['GET'])
+def get_role_experience_summary(role_id):
+    user, employee, err_msg, status = require_role('HR', 'Manager', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    comparison = compare_candidates_for_role(role_id, sort_by='experience', current_user=user, current_employee=employee)
+    if not comparison:
+        return jsonify({"success": False, "message": "Leadership role not found"}), 404
+
+    summary = {
+        "role_id": comparison["role_id"],
+        "role_name": comparison["role_name"],
+        "candidates": [
+            {
+                "employee_id": c["employee_id"],
+                "employee_name": c["employee_name"],
+                "employee_code": c["employee_code"],
+                "department": c["department"],
+                "designation": c["designation"],
+                "experience_score": c["experience_score"],
+                "experience_summary": c.get("experience_summary", {})
+            }
+            for c in comparison["candidates"]
+        ]
+    }
+    return jsonify({"success": True, "data": summary}), 200
+
 
 @roles_bp.route('/suitability-config', methods=['GET'])
 def get_suitability_config():
@@ -277,3 +488,5 @@ def update_suitability_config():
 
     db.session.commit()
     return jsonify({"success": True, "data": config.to_dict(), "message": "Suitability evaluation weights updated successfully"}), 200
+
+

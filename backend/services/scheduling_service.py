@@ -5,6 +5,8 @@ from models.assessment import Assessment, AssessmentAssignment
 from models.employee import Employee
 from models.notification import Notification
 from extensions import db
+from services.eligibility_service import evaluate_pre_assessment_eligibility
+from services.question_generator_service import generate_and_persist_attempt_questions
 
 def resolve_zone_info(tz_str):
     """
@@ -172,13 +174,48 @@ def check_scheduling_conflicts(assignments_data):
         "conflicts": conflicts
     }
 
+def validate_time_window(start_time_str, end_time_str):
+    """
+    Validates start_time and end_time (HH:MM format).
+    Returns (is_valid, duration_minutes, error_message)
+    """
+    if not start_time_str or not end_time_str:
+        return False, 0, "Both start time and end time are required."
+
+    s_parts = str(start_time_str).strip().split(':')
+    e_parts = str(end_time_str).strip().split(':')
+
+    if len(s_parts) != 2 or len(e_parts) != 2:
+        return False, 0, "Invalid time format. Please provide time as HH:MM (24-hour format)."
+
+    try:
+        s_h, s_m = int(s_parts[0]), int(s_parts[1])
+        e_h, e_m = int(e_parts[0]), int(e_parts[1])
+    except ValueError:
+        return False, 0, "Invalid time format. Hours and minutes must be numbers."
+
+    if not (0 <= s_h < 24 and 0 <= s_m < 60):
+        return False, 0, "Invalid start time. Hours must be 0-23 and minutes 0-59."
+    if not (0 <= e_h < 24 and 0 <= e_m < 60):
+        return False, 0, "Invalid end time. Hours must be 0-23 and minutes 0-59."
+
+    start_mins = s_h * 60 + s_m
+    end_mins = e_h * 60 + e_m
+
+    if end_mins <= start_mins:
+        return False, 0, f"Invalid time range: End time ({end_time_str}) must be strictly after start time ({start_time_str})."
+
+    duration = end_mins - start_mins
+    return True, duration, None
+
 def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_by_user_id):
     """
     Saves manually assigned schedules for one or multiple employees.
     STRICT ENFORCEMENT:
-    - Every employee must have explicit scheduled_date, start_time, and duration_minutes.
+    - Every employee must have explicit scheduled_date, start_time, and duration_minutes (or end_time).
     - No automatic time generation or distribution.
     - Rejects incomplete schedules.
+    - Generates and persists fresh attempt questions per employee according to role blueprint.
     """
     if not schedules_input or not isinstance(schedules_input, list):
         return None, "Schedules list is required and cannot be empty", 400
@@ -187,22 +224,69 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
     if not assessment:
         return None, "Assessment not found", 404
 
-    # 1. Validate every entry is complete
+    # 0. Check for duplicate employee assignments in the same batch
+    seen_batch_emp_ids = set()
+    dup_batch_emp_ids = []
+    for s in schedules_input:
+        eid = s.get('employee_id')
+        if eid:
+            if eid in seen_batch_emp_ids and eid not in dup_batch_emp_ids:
+                dup_batch_emp_ids.append(eid)
+            seen_batch_emp_ids.add(eid)
+    if dup_batch_emp_ids:
+        return None, f"Conflict: Duplicate assignment detected: Employee(s) {dup_batch_emp_ids} are included more than once in this batch.", 409
+
+    # 1. Validate every entry is complete, date format is valid, and time window is sound
     incomplete_employees = []
     for idx, s in enumerate(schedules_input, start=1):
         emp_id = s.get('employee_id')
         sc_date = str(s.get('scheduled_date') or s.get('date') or '').strip()
         st_time = str(s.get('start_time') or '').strip()
+        end_time_in = str(s.get('end_time') or '').strip()
         dur_val = s.get('duration_minutes') if s.get('duration_minutes') is not None else s.get('duration')
+
+        # Validate start and end time if end_time is provided
+        if end_time_in:
+            valid_w, calc_dur, err_w = validate_time_window(st_time, end_time_in)
+            if not valid_w:
+                return None, err_w, 400
+            dur_val = calc_dur
+            s['duration_minutes'] = calc_dur
 
         if not emp_id or not sc_date or not st_time or not dur_val or int(dur_val) <= 0:
             emp_name = s.get('employee_name') or f"Employee at row #{idx}"
             incomplete_employees.append(emp_name)
 
+        if sc_date:
+            try:
+                datetime.strptime(sc_date, "%Y-%m-%d")
+            except ValueError:
+                return None, f"Invalid assessment date format '{sc_date}'. Please provide date as YYYY-MM-DD.", 400
+
     if incomplete_employees:
         return None, f"Incomplete schedule: HR must explicitly enter Date, Start Time, and Duration for every employee. Missing details for: {', '.join(incomplete_employees)}.", 400
 
-    # 2. Check conflicts
+    # 2. Enforce Pre-Assessment Eligibility Check
+    ineligible_employees = []
+    for s in schedules_input:
+        emp_id = s.get('employee_id')
+        if not emp_id:
+            continue
+        emp_obj = Employee.query.get(emp_id)
+        if not emp_obj:
+            return None, f"Invalid employee ID #{emp_id} in schedule list", 404
+
+        target_role_id = assessment.role_id if assessment.role_id else 1
+        elig = evaluate_pre_assessment_eligibility(emp_id, target_role_id, employee=emp_obj)
+        if not elig or not elig.get("is_eligible"):
+            emp_name = emp_obj.name or f"Employee #{emp_id}"
+            reasons_str = "; ".join(elig.get("unmet_requirements", ["Unmet role prerequisites"])) if elig else "Failed eligibility"
+            ineligible_employees.append(f"{emp_name} ({reasons_str})")
+
+    if ineligible_employees:
+        return None, f"Pre-assessment eligibility check failed. The following employee(s) do not meet target role prerequisites: {'; '.join(ineligible_employees)}", 422
+
+    # 3. Check conflicts
     conflict_check = check_scheduling_conflicts(schedules_input)
     if conflict_check["has_blocking_conflicts"]:
         err_msgs = [c["message"] for c in conflict_check["conflicts"] if c["severity"] == "error"]
@@ -219,7 +303,7 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
         time_zone = str(s.get('time_zone') or 'IST (Asia/Kolkata)').strip()
         instructions = str(s.get('instructions') or assessment.description or 'Complete your scheduled leadership assessment.').strip()
 
-        end_time_calculated = calculate_end_time_str(st_time, duration)
+        end_time_calculated = s.get('end_time') or calculate_end_time_str(st_time, duration)
 
         # Calculate authoritative UTC datetimes using explicit timezone
         start_utc = create_utc_datetime(sc_date, st_time, time_zone)
@@ -236,13 +320,22 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
                 assessment_id=assessment_id, employee_id=emp_id
             ).filter(AssessmentAssignment.status != 'Completed').first()
 
+        prior_count = db.session.query(db.func.count(AssessmentAssignment.id)).filter(
+            AssessmentAssignment.assessment_id == assessment_id,
+            AssessmentAssignment.employee_id == emp_id
+        ).scalar() or 0
+
         if not assignment:
             assignment = AssessmentAssignment(
                 assessment_id=assessment_id,
                 employee_id=emp_id,
-                assigned_by=assigned_by_user_id
+                assigned_by=assigned_by_user_id,
+                attempt_number=prior_count + 1
             )
             db.session.add(assignment)
+        else:
+            if not assignment.attempt_number:
+                assignment.attempt_number = max(1, prior_count)
 
         # Assign explicit manual schedule values
         assignment.scheduled_date = sc_date
@@ -259,6 +352,13 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
         assignment.assigned_by = assigned_by_user_id
 
         db.session.flush()
+
+        # Generate fresh role-specific questions for this attempt (Section B)
+        target_role_id = assessment.role_id if assessment.role_id else 1
+        success_q, res_q, code_q = generate_and_persist_attempt_questions(assignment, target_role_id)
+        if not success_q:
+            db.session.rollback()
+            return None, res_q, code_q
 
         # In-App Notification to employee's user account
         emp = Employee.query.get(emp_id)

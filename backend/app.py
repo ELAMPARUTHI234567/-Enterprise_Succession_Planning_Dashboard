@@ -11,7 +11,7 @@ from routes import (
     auth_bp, employees_bp, roles_bp, competencies_bp,
     assessments_bp, gap_analysis_bp, successors_bp,
     dashboard_bp, analytics_bp, ml_bp, reports_bp,
-    question_bank_bp, notifications_bp
+    question_bank_bp, notifications_bp, manager_bp, vacancies_bp
 )
 
 def mask_db_uri(uri):
@@ -45,9 +45,10 @@ def create_app():
         "http://127.0.0.1:5174",
         re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"),
         "https://enterprise-succession-dashboard.vercel.app",
-        "https://enterprise-succession-planning-dashboard.vercel.app",
         "https://enterprise-succession-planning-dash.vercel.app",
-        re.compile(r"https://.*\.vercel\.app")
+        "https://enterprise-succession-planning-dash.vercel.app/",
+        re.compile(r"^https://[a-zA-Z0-9-]+\.vercel\.app/?$"),
+        re.compile(r"^https://.*\.vercel\.app/?$")
     ]
     cors_origins_raw = Config.CORS_ORIGINS
     if cors_origins_raw and cors_origins_raw != "*":
@@ -159,6 +160,8 @@ def create_app():
     app.register_blueprint(reports_bp, url_prefix='/api')
     app.register_blueprint(question_bank_bp, url_prefix='/api')
     app.register_blueprint(notifications_bp, url_prefix='/api')
+    app.register_blueprint(manager_bp, url_prefix='/api/manager')
+    app.register_blueprint(vacancies_bp, url_prefix='/api')
 
     @app.route('/api', methods=['GET', 'OPTIONS'])
     @app.route('/api/health', methods=['GET', 'OPTIONS'])
@@ -183,15 +186,23 @@ def create_app():
 
     @app.errorhandler(500)
     def handle_500(e):
-        print(f"[ERROR 500] Internal server error: {str(e)}")
-        resp = jsonify({"success": False, "message": f"Internal server error: {str(e)}"})
+        import traceback
+        print(f"[ERROR 500] Internal server error: {str(e)}\n{traceback.format_exc()}", file=sys.stderr)
+        resp = jsonify({"success": False, "message": "An internal server error occurred. Please try again later."})
         resp.status_code = 500
         return add_cors_headers(resp)
 
     @app.errorhandler(Exception)
     def handle_exception(e):
-        print(f"[ERROR Exception] Unhandled server error: {str(e)}")
-        resp = jsonify({"success": False, "message": f"Server error: {str(e)}"})
+        from werkzeug.exceptions import HTTPException
+        if isinstance(e, HTTPException):
+            resp = jsonify({"success": False, "message": e.description})
+            resp.status_code = e.code
+            return add_cors_headers(resp)
+
+        import traceback
+        print(f"[ERROR Exception] Unhandled server error: {str(e)}\n{traceback.format_exc()}", file=sys.stderr)
+        resp = jsonify({"success": False, "message": "A database or server error occurred while processing your request. Please try again later."})
         resp.status_code = 500
         return add_cors_headers(resp)
 

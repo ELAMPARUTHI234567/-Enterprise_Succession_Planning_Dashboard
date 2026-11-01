@@ -4,7 +4,18 @@ import { Doughnut } from 'react-chartjs-2';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
-export const ReadinessPieChart = ({ highCount = 5, mediumCount = 10, lowCount = 5 }) => {
+export const ReadinessPieChart = ({ highCount = 0, mediumCount = 0, lowCount = 0 }) => {
+  const total = (Number(highCount) || 0) + (Number(mediumCount) || 0) + (Number(lowCount) || 0);
+
+  if (total === 0) {
+    return (
+      <div className="w-full h-72 flex flex-col items-center justify-center text-slate-400">
+        <p className="text-xs font-semibold text-slate-600">No readiness levels recorded</p>
+        <p className="text-[11px] text-slate-400 mt-1">Readiness distribution will render as team evaluations are completed.</p>
+      </div>
+    );
+  }
+
   const data = {
     labels: ['High Readiness', 'Medium Readiness', 'Low Readiness'],
     datasets: [

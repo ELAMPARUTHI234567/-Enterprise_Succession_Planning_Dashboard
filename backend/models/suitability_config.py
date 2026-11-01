@@ -6,11 +6,17 @@ class SuitabilityConfig(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     # Weights stored as percentages (must sum to 100.0)
-    assessment_weight = db.Column(db.Float, default=30.0, nullable=False)
-    readiness_weight = db.Column(db.Float, default=25.0, nullable=False)
+    # Master Prompt initial proposed framework:
+    # Leadership competencies and readiness: 30%
+    # Performance and verified project outcomes: 25%
+    # Skills match: 20%
+    # Relevant professional experience: 15%
+    # Completed role-specific assessment: 10%
+    readiness_weight = db.Column(db.Float, default=30.0, nullable=False)
+    projects_weight = db.Column(db.Float, default=25.0, nullable=False)
     skills_weight = db.Column(db.Float, default=20.0, nullable=False)
-    projects_weight = db.Column(db.Float, default=15.0, nullable=False)
-    experience_weight = db.Column(db.Float, default=10.0, nullable=False)
+    experience_weight = db.Column(db.Float, default=15.0, nullable=False)
+    assessment_weight = db.Column(db.Float, default=10.0, nullable=False)
 
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -22,11 +28,11 @@ class SuitabilityConfig(db.Model):
         cfg = cls.query.first()
         if not cfg:
             cfg = cls(
-                assessment_weight=30.0,
-                readiness_weight=25.0,
+                readiness_weight=30.0,
+                projects_weight=25.0,
                 skills_weight=20.0,
-                projects_weight=15.0,
-                experience_weight=10.0
+                experience_weight=15.0,
+                assessment_weight=10.0
             )
             db.session.add(cfg)
             db.session.commit()

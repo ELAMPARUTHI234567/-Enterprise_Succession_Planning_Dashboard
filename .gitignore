@@ -6,6 +6,7 @@
 .env.production.local
 .env.*
 !.env.example
+!frontend/.env.production
 
 # Byte-compiled / Python files
 __pycache__/
@@ -30,6 +31,9 @@ yarn-error.log*
 # Database & SQLite files
 *.sqlite3
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 backend/succession_planning.db
 
 # IDE / OS files
@@ -44,3 +48,5 @@ tmp/
 user_dump.txt
 backend/fix_oauth_mapping.py
 backend/query_users.py
+Enterprise_Competency_Gap_Analysis_*
+generate_presentation.py

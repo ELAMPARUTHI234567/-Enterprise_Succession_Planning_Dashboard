@@ -5,12 +5,21 @@ import { Bar } from 'react-chartjs-2';
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 export const GapAnalysisChart = ({ labels = [], gaps = [] }) => {
+  if (!labels || labels.length === 0 || !gaps || gaps.length === 0) {
+    return (
+      <div className="w-full h-72 flex flex-col items-center justify-center text-slate-400">
+        <p className="text-xs font-semibold text-slate-600">No competency gap data recorded</p>
+        <p className="text-[11px] text-slate-400 mt-1">Competency gaps will be calculated as employee assessment results are recorded.</p>
+      </div>
+    );
+  }
+
   const data = {
-    labels: labels.length > 0 ? labels : ['Leadership', 'Communication', 'Decision Making', 'Team Mgmt', 'Strategic', 'Problem Solving', 'Adaptability', 'Technical'],
+    labels: labels,
     datasets: [
       {
         label: 'Competency Gap (Points)',
-        data: gaps.length > 0 ? gaps : [12, 5, 13, 5, 15, 0, 0, 0],
+        data: gaps,
         backgroundColor: gaps.map(val => {
           if (val > 20) return 'rgba(239, 68, 68, 0.85)'; // High Gap Red
           if (val > 10) return 'rgba(245, 158, 11, 0.85)'; // Medium Gap Amber

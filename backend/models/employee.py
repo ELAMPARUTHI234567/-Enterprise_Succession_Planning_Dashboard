@@ -17,6 +17,7 @@ class Employee(db.Model):
     performance_score = db.Column(db.Float, nullable=False, default=0.0)
     leadership_score = db.Column(db.Float, nullable=False, default=0.0)
     availability_status = db.Column(db.String(20), nullable=False, default='Available') # 'Available', 'Unavailable'
+    responsibilities = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -63,6 +64,7 @@ class Employee(db.Model):
             "performance_score": self.performance_score,
             "leadership_score": self.leadership_score,
             "availability_status": self.availability_status,
+            "responsibilities": self.responsibilities or "",
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }

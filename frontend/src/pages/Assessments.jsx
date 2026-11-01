@@ -26,6 +26,7 @@ export const Assessments = () => {
   const [completedResults, setCompletedResults] = useState([]);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [selectedResult, setSelectedResult] = useState(null);
+  const [resultsViewMode, setResultsViewMode] = useState('candidate'); // 'candidate' | 'submission'
   const [searchQuery, setSearchQuery] = useState('');
   const [filterRole, setFilterRole] = useState('');
   const [filterDept, setFilterDept] = useState('');
@@ -162,6 +163,9 @@ export const Assessments = () => {
       if (filterDept) params.department = filterDept;
       if (filterReadiness) params.readiness_level = filterReadiness;
       if (searchQuery) params.search = searchQuery;
+      if (resultsViewMode === 'candidate') {
+        params.by_candidate = 'true';
+      }
 
       const res = await assessmentService.getCompletedResults(params);
       if (res.success) {
@@ -179,7 +183,7 @@ export const Assessments = () => {
     if (activeTab === 'results') {
       fetchCompletedResults();
     }
-  }, [activeTab, filterRole, filterDept, filterReadiness, searchQuery]);
+  }, [activeTab, filterRole, filterDept, filterReadiness, searchQuery, resultsViewMode]);
 
   // Fetch Role-Specific Question Bank when selecting role in Bank Explorer
   const fetchRoleQuestionBank = async (roleId) => {
@@ -479,14 +483,37 @@ export const Assessments = () => {
     return true;
   });
 
-  // Calculate summary stats
+  // Calculate summary stats & numerical sorting
   const totalAssessmentsCount = assessments.length;
   const completedCount = completedResults.length;
   const avgScore = completedCount > 0 
-    ? Math.round(completedResults.reduce((acc, curr) => acc + (curr.overall_score || 0), 0) / completedCount) 
+    ? Math.round(completedResults.reduce((acc, curr) => acc + (parseFloat(curr.overall_score) || 0), 0) / completedCount) 
     : 0;
   const highReadinessCount = completedResults.filter(r => r.readiness_level === 'High').length;
   const devReqCount = completedResults.filter(r => r.readiness_level === 'Low' || r.readiness_level === 'Medium' || (r.development_areas && r.development_areas.length > 0)).length;
+
+  // Numeric sorting for assessment scores (100 > 80 > 9)
+  const sortedCompletedResults = [...filteredCompletedResults].sort((a, b) => {
+    const scA = parseFloat(a.overall_score != null ? a.overall_score : 0);
+    const scB = parseFloat(b.overall_score != null ? b.overall_score : 0);
+    return scB - scA;
+  });
+
+  // Calculate honest standard competition ranks (1, 1, 3) for ties
+  let currentRank = 1;
+  sortedCompletedResults.forEach((res, idx) => {
+    const currScore = parseFloat(res.overall_score != null ? res.overall_score : 0);
+    if (idx > 0) {
+      const prevScore = parseFloat(sortedCompletedResults[idx - 1].overall_score != null ? sortedCompletedResults[idx - 1].overall_score : 0);
+      if (currScore < prevScore) {
+        currentRank = idx + 1;
+      }
+    }
+    res.computed_rank = currentRank;
+    res.is_highest = (currentRank === 1 && currScore > 0);
+  });
+
+  const topAssessmentResult = sortedCompletedResults.find(r => r.is_highest);
 
   const filteredBankQuestions = bankQuestions.filter(q => {
     if (filterCompetencyId && q.competency_id !== Number(filterCompetencyId)) return false;
@@ -582,7 +609,7 @@ export const Assessments = () => {
             }`}
           >
             <Calendar className="w-3.5 h-3.5" />
-            <span>Manual Scheduling</span>
+            <span>Batch Scheduling</span>
           </button>
         </div>
       </div>
@@ -614,16 +641,23 @@ export const Assessments = () => {
       {activeTab === 'results' && (
         <div className="space-y-6">
           {/* Summary KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
             <StatCard
-              title="Total Assessments"
+              title="Top Assessment Scorer"
+              value={topAssessmentResult ? `${topAssessmentResult.overall_score}%` : 'N/A'}
+              subtitle={topAssessmentResult ? (topAssessmentResult.employee_name || 'Leading Scorer') : 'No completed tests'}
+              icon={Award}
+              color="amber"
+            />
+            <StatCard
+              title="Total Templates"
               value={totalAssessmentsCount || 5}
               subtitle="Active assessment templates"
               icon={Layers}
               color="indigo"
             />
             <StatCard
-              title="Completed Assessments"
+              title="Completed Submissions"
               value={completedCount}
               subtitle="Processed employee submissions"
               icon={CheckCircle2}
@@ -732,14 +766,48 @@ export const Assessments = () => {
 
           {/* Completed Assessment Results Table */}
           <div className="bg-white rounded-2xl border border-slate-200/80 card-shadow overflow-hidden">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-extrabold text-slate-900">Completed Employee Assessment Results</h3>
-                <p className="text-[11px] text-slate-500">Database records of evaluated assessments, competency gap scores, and ML predictions</p>
+                <h3 className="text-sm font-extrabold text-slate-900 flex items-center space-x-2">
+                  <span>{resultsViewMode === 'candidate' ? 'Unique Candidate Assessment Leaderboard' : 'All Completed Assessment Submissions'}</span>
+                  <span className="text-[10px] font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full border border-indigo-200">
+                    {resultsViewMode === 'candidate' ? 'Candidate-Aggregated' : 'Submission History'}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {resultsViewMode === 'candidate'
+                    ? 'Official completed assessment scores evaluated per candidate on a 0–100 scale with standard competition rank'
+                    : 'Historical log of all individual completed assessment submission records'}
+                </p>
               </div>
-              <span className="text-xs font-extrabold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg">
-                {filteredCompletedResults.length} Completed Results
-              </span>
+
+              <div className="flex items-center space-x-2">
+                <div className="bg-slate-100 p-1 rounded-xl flex items-center space-x-1 border border-slate-200">
+                  <button
+                    onClick={() => setResultsViewMode('candidate')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                      resultsViewMode === 'candidate'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Candidate Leaderboard
+                  </button>
+                  <button
+                    onClick={() => setResultsViewMode('submission')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                      resultsViewMode === 'submission'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    All Submissions
+                  </button>
+                </div>
+                <span className="text-xs font-extrabold bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl border border-indigo-100">
+                  {filteredCompletedResults.length} {resultsViewMode === 'candidate' ? 'Candidates' : 'Submissions'}
+                </span>
+              </div>
             </div>
 
             {resultsLoading ? (
@@ -758,43 +826,110 @@ export const Assessments = () => {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200/60">
                     <tr>
-                      <th className="px-6 py-3">Employee</th>
-                      <th className="px-6 py-3">Assessment Title</th>
-                      <th className="px-6 py-3">Target Role</th>
-                      <th className="px-6 py-3">Submission Date</th>
-                      <th className="px-6 py-3">Raw Score</th>
-                      <th className="px-6 py-3">Score %</th>
-                      <th className="px-6 py-3">Readiness Category</th>
-                      <th className="px-6 py-3">AI ML Class</th>
-                      <th className="px-6 py-3 text-right">Actions</th>
+                      <th className="px-5 py-3 text-center">Rank</th>
+                      <th className="px-5 py-3">Employee</th>
+                      <th className="px-5 py-3">Assessment Name / Title</th>
+                      <th className="px-5 py-3">Target Role</th>
+                      <th className="px-5 py-3 text-center">Marks</th>
+                      <th className="px-5 py-3 text-center">Normalized %</th>
+                      <th className="px-5 py-3 text-center">Status</th>
+                      <th className="px-5 py-3">Readiness</th>
+                      <th className="px-5 py-3">AI ML Class</th>
+                      <th className="px-5 py-3 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                    {filteredCompletedResults.map((res) => {
+                    {sortedCompletedResults.map((res) => {
                       const submissionDateFormatted = res.submission_date
                         ? new Date(res.submission_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
                         : 'N/A';
                       const mlClass = res.ml_prediction?.predicted_class || res.ml_prediction?.data?.predicted_class || res.readiness_level;
+                      const isTop = res.is_highest || res.computed_rank === 1;
 
                       return (
-                        <tr key={res.id || res.assignment_id} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="px-6 py-4">
+                        <tr 
+                          key={res.id || res.assignment_id || res.employee_id} 
+                          className={`transition-colors ${
+                            isTop ? 'bg-amber-50/60 hover:bg-amber-50/90' : 'hover:bg-slate-50/80'
+                          }`}
+                        >
+                          {/* Rank with Honest Tie Handling */}
+                          <td className="px-5 py-3.5 text-center">
+                            <span className={`inline-flex items-center space-x-1 text-[11px] font-black px-2.5 py-0.5 rounded-full ${
+                              res.computed_rank === 1
+                                ? 'bg-amber-200 text-amber-900 border border-amber-300 shadow-xs'
+                                : res.computed_rank <= 3
+                                ? 'bg-indigo-100 text-indigo-900 border border-indigo-200'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {res.computed_rank === 1 && <span>👑</span>}
+                              <span>#{res.computed_rank}</span>
+                            </span>
+                          </td>
+
+                          {/* Employee Name, Code, Email, Department */}
+                          <td className="px-5 py-3.5">
                             <div>
-                              <p className="font-bold text-slate-900 text-xs">{res.employee_name}</p>
-                              <p className="text-[10px] text-slate-500">{res.employee_code} • {res.department}</p>
+                              <div className="flex items-center space-x-1.5 flex-wrap gap-1">
+                                <span className="font-bold text-slate-900 text-xs">{res.employee_name}</span>
+                                {isTop && (
+                                  <span className="text-[9px] font-black bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded border border-amber-300">
+                                    ★ Top Scorer
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-500 font-medium">
+                                {res.email || `${res.employee_code}@company.internal`}
+                              </p>
+                              <p className="text-[10px] text-slate-400">
+                                {res.designation || res.employee_code} • <span className="font-semibold text-slate-600">{res.department}</span>
+                              </p>
                             </div>
                           </td>
-                          <td className="px-6 py-4 font-semibold text-slate-800">{res.assessment_title}</td>
-                          <td className="px-6 py-4 text-indigo-700 font-bold">{res.role_name}</td>
-                          <td className="px-6 py-4 text-slate-600">{submissionDateFormatted}</td>
-                          <td className="px-6 py-4 font-bold text-slate-900">
+
+                          {/* Assessment Name & Completed Count */}
+                          <td className="px-5 py-3.5 font-semibold text-slate-800">
+                            <div>
+                              <p className="text-xs text-slate-900 font-bold">{res.assessment_name || res.assessment_title}</p>
+                              <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200 mt-0.5 inline-block">
+                                {res.completed_assessments_count || 1} completed attempt{res.completed_assessments_count > 1 ? 's' : ''}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Target Role */}
+                          <td className="px-5 py-3.5 text-indigo-700 font-bold">
+                            {res.role_name}
+                          </td>
+
+                          {/* Marks Obtained / Max Marks */}
+                          <td className="px-5 py-3.5 text-center font-bold text-slate-900">
                             {res.total_score} / {res.total_possible}
                           </td>
-                          <td className="px-6 py-4 font-extrabold text-indigo-700">{res.overall_score}%</td>
-                          <td className="px-6 py-4">
+
+                          {/* Normalized Percentage */}
+                          <td className="px-5 py-3.5 text-center">
+                            <span className={`text-xs font-black ${
+                              isTop ? 'text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200' : 'text-indigo-700'
+                            }`}>
+                              {res.overall_score}%
+                            </span>
+                          </td>
+
+                          {/* Status */}
+                          <td className="px-5 py-3.5 text-center">
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                              Completed
+                            </span>
+                          </td>
+
+                          {/* Readiness Category */}
+                          <td className="px-5 py-3.5">
                             <StatusBadge status={res.readiness_level || 'High'} type="readiness" />
                           </td>
-                          <td className="px-6 py-4">
+
+                          {/* ML Class */}
+                          <td className="px-5 py-3.5">
                             <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${
                               mlClass === 'High' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
                               mlClass === 'Medium' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-rose-50 text-rose-800 border-rose-200'
@@ -802,10 +937,12 @@ export const Assessments = () => {
                               ML: {mlClass}
                             </span>
                           </td>
-                          <td className="px-6 py-4 text-right">
+
+                          {/* Actions */}
+                          <td className="px-5 py-3.5 text-right">
                             <button
                               onClick={() => setSelectedResult(res)}
-                              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm transition-colors inline-flex items-center space-x-1"
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm transition-colors inline-flex items-center space-x-1"
                             >
                               <Eye className="w-3.5 h-3.5" />
                               <span>View Results</span>

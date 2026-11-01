@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 # Import test modules
 import test_auth_baseline
 import test_employee_google_onboarding
+import test_assessment_submission_regression
 import jwt
 from unittest.mock import patch, MagicMock
 from app import create_app
@@ -150,7 +151,12 @@ def run_all():
     baseline_suite = unittest.TestLoader().loadTestsFromModule(test_auth_baseline)
     role_suite = unittest.TestLoader().loadTestsFromTestCase(TestGoogleOAuthRoleRouting)
     onboard_suite = unittest.TestLoader().loadTestsFromModule(test_employee_google_onboarding)
-    all_tests = unittest.TestSuite([baseline_suite, role_suite, onboard_suite])
+    submission_suite = unittest.TestLoader().loadTestsFromModule(test_assessment_submission_regression)
+    import test_manager_dashboard_dynamic
+    import test_dashboard_assessment_fix
+    manager_suite = unittest.TestLoader().loadTestsFromModule(test_manager_dashboard_dynamic)
+    fix_suite = unittest.TestLoader().loadTestsFromModule(test_dashboard_assessment_fix)
+    all_tests = unittest.TestSuite([baseline_suite, role_suite, onboard_suite, submission_suite, manager_suite, fix_suite])
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(all_tests)

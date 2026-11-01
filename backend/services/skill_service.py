@@ -11,7 +11,7 @@ PROFICIENCY_SCALE = {
     5: "Expert"
 }
 
-def evaluate_employee_skill_gaps(employee_id, role_id):
+def evaluate_employee_skill_gaps(employee_id, role_id, employee=None, role=None, required_skills=None, emp_skills=None):
     """
     Evaluates employee skills against role requirements:
     - Matched skills (proficiency >= required)
@@ -21,16 +21,20 @@ def evaluate_employee_skill_gaps(employee_id, role_id):
     - Recommended skill-development activities
     - Composite skill match score (0.0 to 100.0)
     """
-    employee = Employee.query.get(employee_id)
-    role = LeadershipRole.query.get(role_id)
+    if employee is None:
+        employee = Employee.query.get(employee_id)
+    if role is None:
+        role = LeadershipRole.query.get(role_id)
     if not employee or not role:
         return None
 
     # Role required skills
-    required_skills = RoleRequiredSkill.query.filter_by(role_id=role_id).all()
+    if required_skills is None:
+        required_skills = RoleRequiredSkill.query.filter_by(role_id=role_id).all()
 
     # Employee skills
-    emp_skills = EmployeeSkill.query.filter_by(employee_id=employee_id).all()
+    if emp_skills is None:
+        emp_skills = EmployeeSkill.query.filter_by(employee_id=employee_id).all()
     emp_skill_map = {s.skill_name.strip().lower(): s for s in emp_skills}
 
     matched_skills = []
