@@ -266,25 +266,26 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
     if incomplete_employees:
         return None, f"Incomplete schedule: HR must explicitly enter Date, Start Time, and Duration for every employee. Missing details for: {', '.join(incomplete_employees)}.", 400
 
-    # 2. Enforce Pre-Assessment Eligibility Check
-    ineligible_employees = []
-    for s in schedules_input:
-        emp_id = s.get('employee_id')
-        if not emp_id:
-            continue
-        emp_obj = Employee.query.get(emp_id)
-        if not emp_obj:
-            return None, f"Invalid employee ID #{emp_id} in schedule list", 404
+    # 2. Enforce Pre-Assessment Eligibility Check (applied to Stage 2 leadership role assessments)
+    if (assessment.assessment_type or '').lower() != 'initial_screening':
+        ineligible_employees = []
+        for s in schedules_input:
+            emp_id = s.get('employee_id')
+            if not emp_id:
+                continue
+            emp_obj = Employee.query.get(emp_id)
+            if not emp_obj:
+                return None, f"Invalid employee ID #{emp_id} in schedule list", 404
 
-        target_role_id = assessment.role_id if assessment.role_id else 1
-        elig = evaluate_pre_assessment_eligibility(emp_id, target_role_id, employee=emp_obj)
-        if not elig or not elig.get("is_eligible"):
-            emp_name = emp_obj.name or f"Employee #{emp_id}"
-            reasons_str = "; ".join(elig.get("unmet_requirements", ["Unmet role prerequisites"])) if elig else "Failed eligibility"
-            ineligible_employees.append(f"{emp_name} ({reasons_str})")
+            target_role_id = assessment.role_id if assessment.role_id else 1
+            elig = evaluate_pre_assessment_eligibility(emp_id, target_role_id, employee=emp_obj)
+            if not elig or not elig.get("is_eligible"):
+                emp_name = emp_obj.name or f"Employee #{emp_id}"
+                reasons_str = "; ".join(elig.get("unmet_requirements", ["Unmet role prerequisites"])) if elig else "Failed eligibility"
+                ineligible_employees.append(f"{emp_name} ({reasons_str})")
 
-    if ineligible_employees:
-        return None, f"Pre-assessment eligibility check failed. The following employee(s) do not meet target role prerequisites: {'; '.join(ineligible_employees)}", 422
+        if ineligible_employees:
+            return None, f"Pre-assessment eligibility check failed. The following employee(s) do not meet target role prerequisites: {'; '.join(ineligible_employees)}", 422
 
     # 3. Check conflicts
     conflict_check = check_scheduling_conflicts(schedules_input)
@@ -350,15 +351,43 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
         assignment.status = 'Scheduled'
         assignment.schedule_status = 'Scheduled'
         assignment.assigned_by = assigned_by_user_id
+        assignment.assessment_type = assessment.assessment_type or 'leadership_role'
+        assignment.stage = assessment.stage or 'Stage 2'
 
         db.session.flush()
 
-        # Generate fresh role-specific questions for this attempt (Section B)
-        target_role_id = assessment.role_id if assessment.role_id else 1
-        success_q, res_q, code_q = generate_and_persist_attempt_questions(assignment, target_role_id)
-        if not success_q:
-            db.session.rollback()
-            return None, res_q, code_q
+        # Generate fresh attempt questions
+        if (assessment.assessment_type or '').lower() == 'initial_screening':
+            # For Stage 1 Initial Screening, populate all questions from the assessment template
+            AssignmentQuestion.query.filter_by(assignment_id=assignment.id).delete()
+            template_questions = assessment.questions or []
+            if not template_questions:
+                from utils.seed_question_bank import seed_initial_screening_template
+                seed_initial_screening_template()
+                db.session.refresh(assessment)
+                template_questions = assessment.questions or []
+
+            for idx, q in enumerate(template_questions, start=1):
+                aq = AssignmentQuestion(
+                    assignment_id=assignment.id,
+                    question=q.question,
+                    question_type=q.question_type or 'Multiple Choice',
+                    competency_id=q.competency_id,
+                    max_score=q.max_score or 1.0,
+                    correct_answer=q.correct_answer,
+                    explanation=q.explanation,
+                    difficulty=q.difficulty or 'Medium',
+                    order_index=idx
+                )
+                aq.set_options(q.get_options())
+                db.session.add(aq)
+        else:
+            # Generate fresh role-specific questions for this attempt (Section B)
+            target_role_id = assessment.role_id if assessment.role_id else 1
+            success_q, res_q, code_q = generate_and_persist_attempt_questions(assignment, target_role_id)
+            if not success_q:
+                db.session.rollback()
+                return None, res_q, code_q
 
         # In-App Notification to employee's user account
         emp = Employee.query.get(emp_id)

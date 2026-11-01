@@ -5,7 +5,7 @@ import {
   CheckCircle2, Clock, PlusCircle, Eye, Search, BarChart2, Cpu, X,
   Sparkles, FileText, ChevronDown, ChevronUp, ShieldCheck, AlertCircle, HelpCircle,
   AlertTriangle, Target, CheckSquare, MessageSquare, ThumbsUp, Send, Trash2, Edit3,
-  Briefcase, Calendar, Star, Filter, Flag, MoreVertical
+  Briefcase, Calendar, Star, Filter, Flag, MoreVertical, ClipboardCheck, Check
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import StatusBadge from '../components/StatusBadge';
@@ -101,6 +101,45 @@ export const ManagerDashboard = () => {
   const [profileForm, setProfileForm] = useState({
     availability_status: 'Available', responsibilities: '', performance_score: ''
   });
+
+  // Stage 1 Initial Screening Assignment State
+  const todayDateStr = new Date().toISOString().slice(0, 10);
+  const [isAssignScreeningModalOpen, setIsAssignScreeningModalOpen] = useState(false);
+  const [selectedScreeningIds, setSelectedScreeningIds] = useState([]);
+  const [screeningDate, setScreeningDate] = useState(todayDateStr);
+  const [screeningTime, setScreeningTime] = useState('10:00');
+  const [screeningDuration, setScreeningDuration] = useState(30);
+  const [assigningScreening, setAssigningScreening] = useState(false);
+  const [screeningSearch, setScreeningSearch] = useState('');
+  const [screeningStatusFilter, setScreeningStatusFilter] = useState('All');
+
+  const handleAssignInitialScreening = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (selectedScreeningIds.length === 0) {
+      showToast('error', 'Please select at least one direct report.');
+      return;
+    }
+
+    setAssigningScreening(true);
+    try {
+      const res = await managerService.assignInitialAssessment({
+        employee_ids: selectedScreeningIds,
+        scheduled_date: screeningDate,
+        start_time: screeningTime,
+        duration_minutes: Number(screeningDuration)
+      });
+      if (res?.data?.success || res?.success) {
+        showToast('success', res?.data?.message || res?.message || 'Stage 1 Initial Screening scheduled successfully.');
+        setIsAssignScreeningModalOpen(false);
+        setSelectedScreeningIds([]);
+        await fetchManagerData();
+      }
+    } catch (err) {
+      showToast('error', err.message || 'Failed to assign initial screening assessment.');
+    } finally {
+      setAssigningScreening(false);
+    }
+  };
 
   const navigate = useNavigate();
 
@@ -229,6 +268,27 @@ export const ManagerDashboard = () => {
       return { ...item, intra_team_rank: currentRank, is_tied: isTied };
     });
   }, [teamResults, searchQuery]);
+
+  // Stage 1 Initial Screening Filter
+  const filteredScreeningMembers = useMemo(() => {
+    return (teamMembers || []).filter(m => {
+      if (screeningStatusFilter !== 'All') {
+        if (screeningStatusFilter === 'Passed' && m.initial_screening_status !== 'Passed') return false;
+        if (screeningStatusFilter === 'Failed' && m.initial_screening_status !== 'Failed') return false;
+        if (screeningStatusFilter === 'Assigned' && m.initial_screening_status !== 'Assigned') return false;
+        if (screeningStatusFilter === 'Awaiting Assessment' && m.initial_screening_status !== 'Awaiting Assessment') return false;
+        if (screeningStatusFilter === 'Eligible' && !m.eligible_for_hr) return false;
+      }
+      if (screeningSearch) {
+        const q = screeningSearch.toLowerCase();
+        const matchName = (m.name || '').toLowerCase().includes(q);
+        const matchCode = (m.employee_code || '').toLowerCase().includes(q);
+        const matchRole = (m.designation || m.department || '').toLowerCase().includes(q);
+        if (!matchName && !matchCode && !matchRole) return false;
+      }
+      return true;
+    });
+  }, [teamMembers, screeningStatusFilter, screeningSearch]);
 
   // Tasks Filter
   const filteredTasks = useMemo(() => {
@@ -674,6 +734,75 @@ export const ManagerDashboard = () => {
         </div>
       </div>
 
+      {/* TWO-STAGE WORKFLOW: STAGE 1 TEAM SCREENING KPI BANNER (8 METRICS) */}
+      <div className="bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 rounded-2xl p-5 text-white border border-indigo-700/40 shadow-lg space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-800/60 pb-3">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-xl bg-indigo-500/20 text-indigo-300 flex items-center justify-center font-bold">
+              <ClipboardCheck className="w-5 h-5 text-indigo-400" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center space-x-2">
+                <span>Stage 1 Employee Screening &amp; Team Performance</span>
+                <span className="px-2 py-0.5 bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 text-[10px] font-extrabold rounded-full">
+                  Two-Stage Succession Model
+                </span>
+              </h2>
+              <p className="text-xs text-indigo-200/80">
+                Live team statistics for initial competency screening and HR leadership evaluation eligibility.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('screening');
+              setIsAssignScreeningModalOpen(true);
+            }}
+            className="px-3.5 py-2 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-xl text-xs transition flex items-center space-x-2 shadow-sm cursor-pointer self-start sm:self-auto"
+          >
+            <PlusCircle className="w-3.5 h-3.5" />
+            <span>Assign Initial Assessment</span>
+          </button>
+        </div>
+
+        {/* 8 STAGE 1 KPI METRICS */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-center">
+            <span className="block text-xl font-black text-white">{kpis.total_approved_team_employees ?? teamMembers.length}</span>
+            <span className="block text-[10px] font-bold text-indigo-200 uppercase tracking-wider mt-1">Approved Team</span>
+          </div>
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-center">
+            <span className="block text-xl font-black text-amber-300">{kpis.newly_assigned_awaiting_screening ?? 0}</span>
+            <span className="block text-[10px] font-bold text-amber-200 uppercase tracking-wider mt-1">Newly Assigned</span>
+          </div>
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-center">
+            <span className="block text-xl font-black text-slate-300">{kpis.awaiting_initial_assessment ?? 0}</span>
+            <span className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mt-1">Awaiting Test</span>
+          </div>
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-center">
+            <span className="block text-xl font-black text-blue-300">{kpis.initial_assessments_assigned ?? 0}</span>
+            <span className="block text-[10px] font-bold text-blue-200 uppercase tracking-wider mt-1">Scheduled</span>
+          </div>
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-center">
+            <span className="block text-xl font-black text-cyan-300">{kpis.initial_assessments_completed ?? 0}</span>
+            <span className="block text-[10px] font-bold text-cyan-200 uppercase tracking-wider mt-1">Completed</span>
+          </div>
+          <div className="bg-white/5 border border-emerald-500/30 bg-emerald-950/20 rounded-xl p-3 text-center">
+            <span className="block text-xl font-black text-emerald-400">{kpis.initial_assessments_passed ?? 0}</span>
+            <span className="block text-[10px] font-bold text-emerald-300 uppercase tracking-wider mt-1">Passed (≥70%)</span>
+          </div>
+          <div className="bg-white/5 border border-rose-500/30 bg-rose-950/20 rounded-xl p-3 text-center">
+            <span className="block text-xl font-black text-rose-400">{kpis.initial_assessments_failed ?? 0}</span>
+            <span className="block text-[10px] font-bold text-rose-300 uppercase tracking-wider mt-1">Failed (&lt;70%)</span>
+          </div>
+          <div className="bg-indigo-600/30 border border-indigo-400/40 rounded-xl p-3 text-center shadow-inner">
+            <span className="block text-xl font-black text-emerald-300">{kpis.eligible_for_hr_evaluation ?? 0}</span>
+            <span className="block text-[10px] font-bold text-indigo-100 uppercase tracking-wider mt-1">Eligible for HR</span>
+          </div>
+        </div>
+      </div>
+
       {/* 8 DYNAMIC KPI CARDS (Section 9) */}
       <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Total authorized team members */}
@@ -822,6 +951,7 @@ export const ManagerDashboard = () => {
       <div className="bg-white rounded-2xl border border-slate-200/80 card-shadow p-2 flex flex-wrap gap-1.5 text-xs font-bold">
         {[
           { id: 'team', label: 'My Team', icon: Users, count: teamMembers.length },
+          { id: 'screening', label: 'Initial Screening (Stage 1)', icon: ClipboardCheck, count: teamMembers.length },
           { id: 'ai-intelligence', label: 'AI Succession & Risks', icon: Sparkles },
           { id: 'hierarchy', label: 'Team Hierarchy', icon: UserCheck },
           { id: 'tasks', label: 'Tasks & Projects', icon: CheckSquare, count: tasks.length },
@@ -1150,6 +1280,244 @@ export const ManagerDashboard = () => {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB: INITIAL SCREENING (STAGE 1) */}
+      {/* ========================================================================= */}
+      {activeTab === 'screening' && (
+        <div className="space-y-6">
+          {/* Header Card */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 card-shadow p-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <ClipboardCheck className="w-5 h-5 text-indigo-600" />
+                  <h3 className="text-lg font-black text-slate-900">Stage 1: Direct Reports Initial Screening</h3>
+                </div>
+                <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+                  Evaluate your direct reports on foundational competencies before recommending or qualifying them for HR role-specific assessments. Passing threshold is 70.0%.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2 flex-wrap gap-2">
+                {/* Search */}
+                <div className="flex items-center space-x-1.5 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+                  <Search className="w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={screeningSearch}
+                    onChange={(e) => setScreeningSearch(e.target.value)}
+                    placeholder="Search direct reports..."
+                    className="bg-transparent text-xs font-medium text-slate-900 focus:outline-none w-36 sm:w-48"
+                  />
+                </div>
+
+                {/* Status Filter */}
+                <select
+                  value={screeningStatusFilter}
+                  onChange={(e) => setScreeningStatusFilter(e.target.value)}
+                  className="text-xs bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-semibold text-slate-700 focus:outline-none"
+                >
+                  <option value="All">All Statuses</option>
+                  <option value="Awaiting Assessment">Awaiting Screening</option>
+                  <option value="Assigned">Assigned / Scheduled</option>
+                  <option value="Passed">Passed (≥70%)</option>
+                  <option value="Failed">Failed (&lt;70%)</option>
+                  <option value="Eligible">Eligible for HR</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedScreeningIds([]);
+                    setIsAssignScreeningModalOpen(true);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>Assign Initial Screening</span>
+                </button>
+              </div>
+            </div>
+
+            {/* 7 Foundation Competency Chips */}
+            <div className="mt-5 pt-4">
+              <h4 className="text-xs font-bold text-slate-700 mb-2.5 uppercase tracking-wider">
+                Stage 1 Evaluated Core Competencies (Passing Benchmark: 70%)
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+                {[
+                  { name: 'Communication', desc: 'Clarity, listening & presentation' },
+                  { name: 'Problem Solving', desc: 'Root cause analysis & solutions' },
+                  { name: 'Teamwork', desc: 'Cross-functional collaboration' },
+                  { name: 'Technical Knowledge', desc: 'Domain fluency & best practices' },
+                  { name: 'Decision Making', desc: 'Risk-aware timely judgment' },
+                  { name: 'Adaptability', desc: 'Agility during change' },
+                  { name: 'Basic Leadership', desc: 'Initiative, ownership & coaching' }
+                ].map((c) => (
+                  <div key={c.name} className="bg-slate-50/80 border border-slate-200/80 rounded-xl p-2.5 text-center">
+                    <span className="block text-xs font-black text-slate-800">{c.name}</span>
+                    <span className="block text-[10px] text-slate-500 mt-0.5 line-clamp-1">{c.desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Direct Reports Table */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 card-shadow overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-extrabold text-slate-900">Direct Reports Initial Screening Records</h4>
+                <p className="text-xs text-slate-500">Showing {filteredScreeningMembers.length} team members</p>
+              </div>
+            </div>
+
+            {filteredScreeningMembers.length === 0 ? (
+              <div className="text-center py-12 px-4">
+                <ClipboardCheck className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                <p className="text-sm font-bold text-slate-600">No matching team members found</p>
+                <p className="text-xs text-slate-400 mt-1">Adjust search filter or assign new initial screening assessments.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-[11px] font-extrabold text-slate-500 uppercase tracking-wider border-b border-slate-200">
+                      <th className="py-3.5 px-4">Employee</th>
+                      <th className="py-3.5 px-4">Role &amp; Dept</th>
+                      <th className="py-3.5 px-4">Screening Status</th>
+                      <th className="py-3.5 px-4">Score &amp; Date</th>
+                      <th className="py-3.5 px-4">HR Succession Eligibility</th>
+                      <th className="py-3.5 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {filteredScreeningMembers.map((emp) => {
+                      const isPassed = emp.initial_screening_status === 'Passed';
+                      const isFailed = emp.initial_screening_status === 'Failed';
+                      const isAssigned = emp.initial_screening_status === 'Assigned';
+                      const isAwaiting = !isPassed && !isFailed && !isAssigned;
+
+                      return (
+                        <tr key={emp.id} className="hover:bg-slate-50/60 transition-colors">
+                          <td className="py-3.5 px-4">
+                            <div className="flex items-center space-x-3">
+                              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 text-white font-bold flex items-center justify-center text-xs shadow-sm">
+                                {emp.name ? emp.name.split(' ').map(n => n[0]).join('').slice(0, 2) : 'EM'}
+                              </div>
+                              <div>
+                                <p className="font-bold text-slate-900">{emp.name}</p>
+                                <p className="text-[11px] text-slate-400">{emp.employee_code} • {emp.email}</p>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="py-3.5 px-4">
+                            <span className="font-medium text-slate-800 block">{emp.designation || 'Staff'}</span>
+                            <span className="text-[11px] text-slate-500 block">{emp.department || 'Operations'}</span>
+                          </td>
+
+                          <td className="py-3.5 px-4">
+                            {isPassed && (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-600" />
+                                Passed (≥70%)
+                              </span>
+                            )}
+                            {isFailed && (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                <AlertTriangle className="w-3 h-3 mr-1 text-rose-600" />
+                                Failed (&lt;70%)
+                              </span>
+                            )}
+                            {isAssigned && (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                <Clock className="w-3 h-3 mr-1 text-blue-600" />
+                                Assigned / Scheduled
+                              </span>
+                            )}
+                            {isAwaiting && (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                <AlertCircle className="w-3 h-3 mr-1 text-amber-600" />
+                                Awaiting Screening
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="py-3.5 px-4">
+                            {emp.initial_screening_score != null ? (
+                              <div>
+                                <div className="flex items-center space-x-2">
+                                  <span className={`text-sm font-black ${isPassed ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                    {emp.initial_screening_score}%
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 font-medium">
+                                    (Min: 70%)
+                                  </span>
+                                </div>
+                                {emp.initial_screening_date && (
+                                  <span className="text-[10px] text-slate-500 block mt-0.5">
+                                    Completed: {emp.initial_screening_date}
+                                  </span>
+                                )}
+                              </div>
+                            ) : emp.initial_screening_date ? (
+                              <span className="text-xs text-slate-500 font-medium">
+                                Scheduled: {emp.initial_screening_date}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-400 italic">Not taken</span>
+                            )}
+                          </td>
+
+                          <td className="py-3.5 px-4">
+                            {emp.eligible_for_hr ? (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-300 shadow-sm">
+                                <Check className="w-3 h-3 mr-1 text-emerald-600 stroke-[3]" />
+                                Eligible for HR Stage 2
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                                Pending Stage 1 Screening
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="py-3.5 px-4 text-right">
+                            {isAwaiting || isFailed ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedScreeningIds([emp.id]);
+                                  setIsAssignScreeningModalOpen(true);
+                                }}
+                                className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs transition border border-indigo-200 flex items-center space-x-1 ml-auto cursor-pointer"
+                              >
+                                <PlusCircle className="w-3.5 h-3.5" />
+                                <span>{isFailed ? 'Reassign Screening' : 'Assign Screening'}</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => navigate(`/employees/${emp.id}`)}
+                                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition flex items-center space-x-1 ml-auto cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>View Profile</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -2638,6 +3006,175 @@ export const ManagerDashboard = () => {
                 >
                   {submitting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
                   <span>Save Responsibilities</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: ASSIGN STAGE 1 INITIAL SCREENING ASSESSMENT */}
+      {/* ========================================================================= */}
+      {isAssignScreeningModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-scaleUp">
+            <div className="flex items-center justify-between border-b pb-4">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <ClipboardCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">Assign Stage 1 Initial Screening</h3>
+                  <p className="text-xs text-slate-500">Assign standard foundation competency assessment to direct reports</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAssignScreeningModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-xl transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAssignInitialScreening} className="space-y-4">
+              {/* Info Banner */}
+              <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-3.5 text-xs text-indigo-900 space-y-1">
+                <p className="font-bold flex items-center space-x-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Standard 7-Competency Foundation Assessment</span>
+                </p>
+                <p className="text-indigo-700/90 text-[11px]">
+                  Covers Communication, Problem Solving, Teamwork, Technical Knowledge, Decision Making, Adaptability, and Leadership Potential. 70.0% passing score qualifies candidate for HR Leadership Role evaluations.
+                </p>
+              </div>
+
+              {/* Direct Reports Selection */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-slate-700">
+                    Select Direct Reports ({selectedScreeningIds.length} selected)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const awaitingIds = teamMembers
+                        .filter(m => m.initial_screening_status !== 'Passed')
+                        .map(m => m.id);
+                      if (selectedScreeningIds.length === awaitingIds.length) {
+                        setSelectedScreeningIds([]);
+                      } else {
+                        setSelectedScreeningIds(awaitingIds);
+                      }
+                    }}
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-800 cursor-pointer"
+                  >
+                    {selectedScreeningIds.length > 0 ? 'Clear Selection' : 'Select All Awaiting'}
+                  </button>
+                </div>
+
+                <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 p-1 bg-slate-50/50">
+                  {teamMembers.map((emp) => {
+                    const isSelected = selectedScreeningIds.includes(emp.id);
+                    return (
+                      <label
+                        key={emp.id}
+                        className={`flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition ${
+                          isSelected ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-slate-100/70'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2.5">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedScreeningIds(prev => [...prev, emp.id]);
+                              } else {
+                                setSelectedScreeningIds(prev => prev.filter(id => id !== emp.id));
+                              }
+                            }}
+                            className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                          />
+                          <div>
+                            <span className="text-xs font-bold text-slate-900 block">{emp.name}</span>
+                            <span className="text-[10px] text-slate-500 block">{emp.designation || 'Staff'} • {emp.department}</span>
+                          </div>
+                        </div>
+
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          emp.initial_screening_status === 'Passed'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : emp.initial_screening_status === 'Failed'
+                            ? 'bg-rose-100 text-rose-800'
+                            : emp.initial_screening_status === 'Assigned'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {emp.initial_screening_status || 'Awaiting'}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Schedule Inputs */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Scheduled Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={screeningDate}
+                    onChange={(e) => setScreeningDate(e.target.value)}
+                    className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Start Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={screeningTime}
+                    onChange={(e) => setScreeningTime(e.target.value)}
+                    className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Duration (Mins)</label>
+                  <select
+                    value={screeningDuration}
+                    onChange={(e) => setScreeningDuration(e.target.value)}
+                    className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    <option value={30}>30 Minutes</option>
+                    <option value={45}>45 Minutes</option>
+                    <option value={60}>60 Minutes</option>
+                    <option value={90}>90 Minutes</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex justify-end space-x-2 pt-3 border-t">
+                <button
+                  type="button"
+                  onClick={() => setIsAssignScreeningModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={assigningScreening || selectedScreeningIds.length === 0}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-md transition flex items-center space-x-1.5 cursor-pointer"
+                >
+                  {assigningScreening ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ClipboardCheck className="w-3.5 h-3.5" />}
+                  <span>Schedule Screening ({selectedScreeningIds.length})</span>
                 </button>
               </div>
             </form>

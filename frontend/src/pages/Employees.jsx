@@ -34,6 +34,7 @@ export const Employees = () => {
   const [actionSuccess, setActionSuccess] = useState('');
   const [approvingId, setApprovingId] = useState(null);
   const [rejectingId, setRejectingId] = useState(null);
+  const [selectedManagerMap, setSelectedManagerMap] = useState({});
 
   // Modal States
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -202,11 +203,15 @@ export const Employees = () => {
     setActionSuccess('');
     setError('');
     try {
-      const res = await authService.approveUserAccount(userId);
+      const assignedMgrId = selectedManagerMap[userId] || null;
+      const res = await authService.approveUserAccount(userId, {
+        manager_id: assignedMgrId ? parseInt(assignedMgrId) : null
+      });
       if (res.success) {
         setActionSuccess(`Employee account for "${userName || 'Employee'}" has been approved and activated!`);
         await fetchPendingRegistrations();
         await fetchEmployees();
+        await fetchManagers();
       }
     } catch (err) {
       setError(err.message || 'Failed to approve registration');
@@ -442,6 +447,23 @@ export const Employees = () => {
                         <span className="font-mono text-slate-500">{pUser.employee_code}</span>
                       </>
                     )}
+                  </div>
+                  <div className="pt-2 border-t border-slate-100">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Assign Reporting Manager
+                    </label>
+                    <select
+                      value={selectedManagerMap[pUser.id] || ''}
+                      onChange={(e) => setSelectedManagerMap(prev => ({ ...prev, [pUser.id]: e.target.value }))}
+                      className="w-full text-xs py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 focus:bg-white"
+                    >
+                      <option value="">-- Assign Manager (Optional) --</option>
+                      {managers.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.designation || 'Manager'}) - {m.department}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 

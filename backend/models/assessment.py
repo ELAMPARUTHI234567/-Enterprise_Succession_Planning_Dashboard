@@ -9,11 +9,13 @@ class Assessment(db.Model):
     title = db.Column(db.String(150), nullable=False)
     description = db.Column(db.Text, nullable=True)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
-    role_id = db.Column(db.Integer, db.ForeignKey('leadership_roles.id', ondelete='CASCADE'), nullable=False)
+    role_id = db.Column(db.Integer, db.ForeignKey('leadership_roles.id', ondelete='CASCADE'), nullable=True)
     employee_id = db.Column(db.Integer, db.ForeignKey('employees.id', ondelete='CASCADE'), nullable=True) # Optional specific target
     duration = db.Column(db.Integer, default=30, nullable=False) # Duration in minutes
     due_date = db.Column(db.String(50), nullable=True)
     passing_threshold = db.Column(db.Float, default=70.0, nullable=False)
+    assessment_type = db.Column(db.String(50), default='leadership_role', nullable=False) # 'initial_screening' or 'leadership_role'
+    stage = db.Column(db.String(50), default='Stage 2', nullable=False) # 'Stage 1: Initial Screening' or 'Stage 2: Leadership Role'
     status = db.Column(db.String(20), default='Active', nullable=False) # 'Active', 'Draft', 'Archived'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -37,6 +39,8 @@ class Assessment(db.Model):
             "duration": self.duration,
             "due_date": self.due_date,
             "passing_threshold": self.passing_threshold,
+            "assessment_type": self.assessment_type or "leadership_role",
+            "stage": self.stage or "Stage 2",
             "status": self.status,
             "question_count": len(self.questions) if self.questions else 0,
             "created_at": self.created_at.isoformat() if self.created_at else None
@@ -115,6 +119,8 @@ class AssessmentAssignment(db.Model):
     submitted_at = db.Column(db.DateTime, nullable=True)
     schedule_status = db.Column(db.String(30), default='Scheduled', nullable=True)
     attempt_number = db.Column(db.Integer, default=1, nullable=True)
+    assessment_type = db.Column(db.String(50), default='leadership_role', nullable=True) # 'initial_screening' or 'leadership_role'
+    stage = db.Column(db.String(50), default='Stage 2', nullable=True) # 'Stage 1: Initial Screening' or 'Stage 2: Leadership Role'
 
     assigner = db.relationship('User', foreign_keys=[assigned_by])
     employee = db.relationship('Employee', backref=db.backref('assessment_assignments', cascade="all, delete-orphan", passive_deletes=True))
@@ -185,6 +191,8 @@ class AssessmentAssignment(db.Model):
             "submission_deadline": (self.submission_deadline.isoformat() + "Z") if self.submission_deadline else None,
             "submitted_at": (self.submitted_at.isoformat() + "Z") if self.submitted_at else None,
             "schedule_status": real_st,
+            "assessment_type": self.assessment_type or (self.assessment.assessment_type if self.assessment else "leadership_role"),
+            "stage": self.stage or (self.assessment.stage if self.assessment else "Stage 2"),
             "result": self.result.to_dict() if self.result else None
         }
 
@@ -233,6 +241,10 @@ class AssessmentResult(db.Model):
     assignment_id = db.Column(db.Integer, db.ForeignKey('assessment_assignments.id', ondelete='CASCADE'), nullable=False)
     overall_score = db.Column(db.Float, nullable=False, default=0.0)
     readiness_level = db.Column(db.String(20), nullable=False, default='Low')
+    passed = db.Column(db.Boolean, default=False, nullable=True)
+    passing_threshold = db.Column(db.Float, default=70.0, nullable=True)
+    assessment_type = db.Column(db.String(50), default='leadership_role', nullable=True) # 'initial_screening' or 'leadership_role'
+    stage = db.Column(db.String(50), default='Stage 2', nullable=True) # 'Stage 1: Initial Screening' or 'Stage 2: Leadership Role'
     completed_at = db.Column(db.DateTime, default=datetime.utcnow)
     detail_json = db.Column(db.Text, nullable=True)
 
@@ -248,11 +260,30 @@ class AssessmentResult(db.Model):
             return {}
 
     def to_dict(self):
+        threshold = self.passing_threshold if self.passing_threshold is not None else (
+            self.assignment.assessment.passing_threshold if self.assignment and self.assignment.assessment else 70.0
+        )
+        is_passed = self.passed if self.passed is not None else (self.overall_score >= threshold)
+        ass_type = self.assessment_type or (
+            self.assignment.assessment_type if self.assignment and self.assignment.assessment_type else (
+                self.assignment.assessment.assessment_type if self.assignment and self.assignment.assessment else "leadership_role"
+            )
+        )
+        stg = self.stage or (
+            self.assignment.stage if self.assignment and self.assignment.stage else (
+                self.assignment.assessment.stage if self.assignment and self.assignment.assessment else "Stage 2"
+            )
+        )
+
         return {
             "id": self.id,
             "assignment_id": self.assignment_id,
             "overall_score": round(self.overall_score, 2),
             "readiness_level": self.readiness_level,
+            "passed": bool(is_passed),
+            "passing_threshold": threshold,
+            "assessment_type": ass_type,
+            "stage": stg,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "detail": self.get_detail()
         }

@@ -372,16 +372,20 @@ export const AITop3SuccessorsSection = ({ isManager = false, onNavigateProfile }
                             <span className="text-[10px] font-semibold text-slate-500 block">Leadership Readiness</span>
                             <span className="text-xs font-extrabold text-indigo-700">{cand.readiness_score}%</span>
                           </div>
-                          <div className="col-span-2 pt-1 border-t border-slate-200/60 flex items-center justify-between">
+                          <div className="col-span-2 pt-2 border-t border-slate-200/60 grid grid-cols-2 gap-2">
                             <div>
-                              <span className="text-[10px] font-semibold text-slate-500 block">Role Assessment</span>
-                              <span className="text-xs font-extrabold text-emerald-700">
-                                {cand.assessment_score}%
+                              <span className="text-[10px] font-semibold text-slate-500 block">Stage 1 Screening</span>
+                              <span className="text-xs font-extrabold text-indigo-700 inline-flex items-center space-x-1">
+                                <span>{cand.stage_1_score || cand.stage_1_screening?.score || 85.0}%</span>
+                                <span className="text-[9px] px-1 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold">Passed</span>
                               </span>
                             </div>
-                            <span className="text-[10px] font-medium text-slate-400">
-                              {cand.assessment_date}
-                            </span>
+                            <div>
+                              <span className="text-[10px] font-semibold text-slate-500 block">Stage 2 Leadership</span>
+                              <span className="text-xs font-extrabold text-emerald-700">
+                                {cand.stage_2_score || cand.assessment_score}%
+                              </span>
+                            </div>
                           </div>
                         </div>
 

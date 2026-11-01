@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from extensions import db
 from models.employee import Employee
 from models.user import User
@@ -8,7 +8,8 @@ from models.competency import Competency
 from models.role_competency import RoleCompetency
 from models.employee_competency import EmployeeCompetency
 from models.employee_project import EmployeeProject
-from models.assessment import AssessmentAssignment, AssessmentResult
+from models.assessment import Assessment, AssessmentAssignment, AssessmentResult, AssessmentQuestion, AssignmentQuestion
+from models.notification import Notification
 from models.manager_dashboard import (
     TeamTask, TeamGoal, TeamIssue, ManagerFeedback, ManagerRecommendation, PerformanceReview
 )
@@ -219,6 +220,79 @@ def get_manager_overview():
         comp_required.append(tgt)
         comp_gaps.append(gap)
 
+    # 8. Two-Stage Workflow: Stage 1 Initial Screening Statistics (8 KPIs)
+    total_approved_team_employees = len(team_members)
+    awaiting_initial_assessment = 0
+    initial_assessments_assigned = 0
+    initial_assessments_completed = 0
+    initial_assessments_passed = 0
+    initial_assessments_failed = 0
+    eligible_for_hr_evaluation = 0
+    newly_assigned_awaiting_screening = 0
+
+    if team_ids:
+        screening_assignments = AssessmentAssignment.query.options(
+            db.joinedload(AssessmentAssignment.result),
+            db.joinedload(AssessmentAssignment.assessment)
+        ).filter(
+            AssessmentAssignment.employee_id.in_(team_ids),
+            (AssessmentAssignment.assessment_type == 'initial_screening') |
+            (AssessmentAssignment.stage.ilike('%stage 1%')) |
+            (AssessmentAssignment.stage.ilike('%screening%'))
+        ).all()
+
+        screening_by_emp = {}
+        for a in screening_assignments:
+            screening_by_emp.setdefault(a.employee_id, []).append(a)
+
+        for emp in team_members:
+            e_assigns = screening_by_emp.get(emp.id, [])
+            if not e_assigns:
+                awaiting_initial_assessment += 1
+                newly_assigned_awaiting_screening += 1
+            else:
+                completed_a = [a for a in e_assigns if a.status == 'Completed' and a.result]
+                if completed_a:
+                    initial_assessments_completed += 1
+                    latest_res = max(completed_a, key=lambda x: (x.result.completed_at if x.result else datetime.min) or datetime.min).result
+                    threshold = latest_res.passing_threshold if latest_res.passing_threshold is not None else 70.0
+                    is_passed = latest_res.passed if latest_res.passed is not None else (latest_res.overall_score >= threshold)
+                    if is_passed:
+                        initial_assessments_passed += 1
+                        eligible_for_hr_evaluation += 1
+                    else:
+                        initial_assessments_failed += 1
+                else:
+                    initial_assessments_assigned += 1
+                    newly_assigned_awaiting_screening += 1
+    else:
+        awaiting_initial_assessment = total_approved_team_employees
+        newly_assigned_awaiting_screening = total_approved_team_employees
+
+    team_screening_stats = {
+        "total_approved_team_employees": total_approved_team_employees,
+        "newly_assigned_awaiting_screening": newly_assigned_awaiting_screening,
+        "awaiting_initial_assessment": awaiting_initial_assessment,
+        "initial_assessments_assigned": initial_assessments_assigned,
+        "initial_assessments_completed": initial_assessments_completed,
+        "initial_assessments_passed": initial_assessments_passed,
+        "initial_assessments_failed": initial_assessments_failed,
+        "eligible_for_hr_evaluation": eligible_for_hr_evaluation
+    }
+
+    overview_kpis = {
+        "total_team_members": len(team_members),
+        "active_tasks": active_tasks,
+        "completed_tasks": completed_tasks,
+        "overdue_tasks": overdue_tasks,
+        "projects_in_progress": in_progress_projects_count,
+        "open_issues": open_issues,
+        "pending_feedback": pending_feedback,
+        "employees_needing_development": needing_dev_count,
+        "task_completion_rate": completion_rate,
+        **team_screening_stats
+    }
+
     return jsonify({
         "success": True,
         "manager": {
@@ -229,17 +303,8 @@ def get_manager_overview():
             "designation": mgr_emp.designation,
             "email": mgr_emp.email
         },
-        "kpis": {
-            "total_team_members": len(team_members),
-            "active_tasks": active_tasks,
-            "completed_tasks": completed_tasks,
-            "overdue_tasks": overdue_tasks,
-            "projects_in_progress": in_progress_projects_count,
-            "open_issues": open_issues,
-            "pending_feedback": pending_feedback,
-            "employees_needing_development": needing_dev_count,
-            "task_completion_rate": completion_rate
-        },
+        "kpis": overview_kpis,
+        "team_screening_stats": team_screening_stats,
         "charts": {
             "task_status": {
                 "labels": ["Pending", "In Progress", "Completed", "Overdue"],
@@ -360,9 +425,193 @@ def get_team_members():
         emp_dict["latest_assignment_status"] = latest_assign.get_real_status() if latest_assign else "Not Scheduled"
         emp_dict["performance_reviews"] = reviews_by_emp.get(emp.id, [])
 
+        # Stage 1 Initial Screening status and eligibility for HR leadership evaluation
+        screening_assigns = [
+            a for a in emp.assessment_assignments
+            if (a.assessment_type or '').lower() == 'initial_screening' or
+               (a.assessment and (a.assessment.assessment_type or '').lower() == 'initial_screening') or
+               (a.stage and 'stage 1' in a.stage.lower())
+        ]
+        completed_screenings = [a for a in screening_assigns if a.status == 'Completed' and a.result]
+
+        if completed_screenings:
+            latest_scr_a = max(completed_screenings, key=lambda x: (x.result.completed_at if x.result else datetime.min) or datetime.min)
+            scr_res = latest_scr_a.result
+            threshold = scr_res.passing_threshold if scr_res.passing_threshold is not None else 70.0
+            is_passed = scr_res.passed if scr_res.passed is not None else (scr_res.overall_score >= threshold)
+            emp_dict["initial_screening_status"] = "Passed" if is_passed else "Failed"
+            emp_dict["initial_screening_score"] = round(scr_res.overall_score, 1)
+            emp_dict["initial_screening_passed"] = bool(is_passed)
+            emp_dict["initial_screening_date"] = scr_res.completed_at.strftime('%Y-%m-%d') if scr_res.completed_at else None
+            emp_dict["eligible_for_hr"] = bool(is_passed)
+            emp_dict["initial_screening_assignment_id"] = latest_scr_a.id
+        elif screening_assigns:
+            latest_scr_a = screening_assigns[-1]
+            emp_dict["initial_screening_status"] = "Assigned"
+            emp_dict["initial_screening_score"] = None
+            emp_dict["initial_screening_passed"] = False
+            emp_dict["initial_screening_date"] = latest_scr_a.scheduled_date
+            emp_dict["eligible_for_hr"] = False
+            emp_dict["initial_screening_assignment_id"] = latest_scr_a.id
+        else:
+            emp_dict["initial_screening_status"] = "Awaiting Assessment"
+            emp_dict["initial_screening_score"] = None
+            emp_dict["initial_screening_passed"] = False
+            emp_dict["initial_screening_date"] = None
+            emp_dict["eligible_for_hr"] = False
+            emp_dict["initial_screening_assignment_id"] = None
+
         data.append(emp_dict)
 
     return jsonify({"success": True, "data": data}), 200
+
+
+@manager_bp.route('/assign-initial-assessment', methods=['POST'])
+def assign_initial_assessment():
+    user, mgr_emp, is_hr, err = get_authorized_manager_context()
+    if err:
+        return err
+
+    data = request.get_json() or {}
+    employee_ids = data.get('employee_ids') or data.get('selected_employee_ids') or []
+    if isinstance(employee_ids, int):
+        employee_ids = [employee_ids]
+
+    if not employee_ids or not isinstance(employee_ids, list):
+        return jsonify({"success": False, "message": "At least one direct report must be selected."}), 400
+
+    from utils.seed_question_bank import seed_initial_screening_template
+    screening_ass = Assessment.query.filter_by(assessment_type='initial_screening').first()
+    if not screening_ass:
+        seed_initial_screening_template()
+        screening_ass = Assessment.query.filter_by(assessment_type='initial_screening').first()
+
+    if not screening_ass:
+        return jsonify({"success": False, "message": "Stage 1 Initial Screening assessment template not found."}), 500
+
+    scheduled_date = str(data.get('scheduled_date') or datetime.utcnow().strftime('%Y-%m-%d')).strip()
+    start_time = str(data.get('start_time') or '10:00').strip()
+    duration_minutes = int(data.get('duration_minutes') or screening_ass.duration or 30)
+    time_zone = str(data.get('time_zone') or 'IST (Asia/Kolkata)').strip()
+
+    created_assignments = []
+    skipped_duplicates = []
+    unauthorized_employees = []
+
+    from services.scheduling_service import create_utc_datetime, calculate_end_time_str
+    end_time_str = calculate_end_time_str(start_time, duration_minutes)
+    start_utc = create_utc_datetime(scheduled_date, start_time, time_zone)
+    end_utc = start_utc + timedelta(minutes=duration_minutes) if start_utc else create_utc_datetime(scheduled_date, end_time_str, time_zone)
+
+    for eid in employee_ids:
+        emp = Employee.query.get(eid)
+        if not emp:
+            continue
+
+        # RBAC Check: Manager can only assign to direct reports (unless HR/Admin)
+        if not is_hr and emp.manager_id != mgr_emp.id:
+            unauthorized_employees.append(emp.name or f"Employee #{eid}")
+            continue
+
+        # Prevent duplicate active assignment: Check if already has active (non-completed) or passed
+        existing_assign = AssessmentAssignment.query.filter(
+            AssessmentAssignment.employee_id == emp.id,
+            (AssessmentAssignment.assessment_type == 'initial_screening') |
+            (AssessmentAssignment.assessment_id == screening_ass.id)
+        ).all()
+
+        has_active_or_passed = False
+        for ea in existing_assign:
+            if ea.status != 'Completed':
+                has_active_or_passed = True
+                break
+            elif ea.result:
+                threshold = ea.result.passing_threshold if ea.result.passing_threshold is not None else 70.0
+                is_pass = ea.result.passed if ea.result.passed is not None else (ea.result.overall_score >= threshold)
+                if is_pass:
+                    has_active_or_passed = True
+                    break
+
+        if has_active_or_passed:
+            skipped_duplicates.append(emp.name)
+            continue
+
+        assignment = AssessmentAssignment(
+            assessment_id=screening_ass.id,
+            employee_id=emp.id,
+            assigned_by=user.id,
+            assessment_type='initial_screening',
+            stage='Stage 1: Initial Screening',
+            status='Scheduled',
+            schedule_status='Scheduled',
+            scheduled_date=scheduled_date,
+            start_time=start_time,
+            end_time=end_time_str,
+            duration_minutes=duration_minutes,
+            time_zone=time_zone,
+            scheduled_start_datetime=start_utc,
+            scheduled_end_datetime=end_utc,
+            due_date=f"{scheduled_date} {end_time_str}",
+            instructions=screening_ass.description or "Stage 1 Initial Screening Assessment"
+        )
+        db.session.add(assignment)
+        db.session.flush()
+
+        # Copy questions to AssignmentQuestion
+        questions_to_copy = screening_ass.questions or []
+        if not questions_to_copy:
+            seed_initial_screening_template()
+            db.session.refresh(screening_ass)
+            questions_to_copy = screening_ass.questions or []
+
+        for idx, q in enumerate(questions_to_copy, start=1):
+            aq = AssignmentQuestion(
+                assignment_id=assignment.id,
+                question=q.question,
+                question_type=q.question_type or 'Multiple Choice',
+                competency_id=q.competency_id,
+                max_score=q.max_score or 1.0,
+                correct_answer=q.correct_answer,
+                explanation=q.explanation,
+                difficulty=q.difficulty or 'Medium',
+                order_index=idx
+            )
+            aq.set_options(q.get_options())
+            db.session.add(aq)
+
+        # Create notification if user linked
+        if emp.user_id:
+            db.session.add(Notification(
+                user_id=emp.user_id,
+                title="Stage 1 Initial Screening Assigned",
+                message=f"Your manager {mgr_emp.name} has scheduled your Stage 1 Initial Screening for {scheduled_date} at {start_time}.",
+                type="assessment_assigned",
+                link="/employee-dashboard"
+            ))
+
+        created_assignments.append(assignment.to_dict())
+
+    db.session.commit()
+
+    if unauthorized_employees:
+        return jsonify({
+            "success": False,
+            "message": f"Access forbidden: You cannot assign assessments to non-direct reports: {', '.join(unauthorized_employees)}"
+        }), 403
+
+    msg = f"Successfully assigned Stage 1 Initial Screening to {len(created_assignments)} employee(s)."
+    if skipped_duplicates:
+        msg += f" Note: {len(skipped_duplicates)} employee(s) already had an active or passed screening ({', '.join(skipped_duplicates)})."
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "assigned_count": len(created_assignments),
+            "assignments": created_assignments,
+            "skipped_duplicates": skipped_duplicates
+        },
+        "message": msg
+    }), 201
 
 
 

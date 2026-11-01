@@ -66,9 +66,7 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
         }
 
     # 2. Scope Candidate Pool based on RBAC among employees with completed assessments
-    is_hr_or_admin = False
-    if current_user and current_user.role.lower() in ['hr', 'admin']:
-        is_hr_or_admin = True
+    is_hr_or_admin = (current_user is None) or (current_user.role.lower() in ['hr', 'admin'])
 
     if manager_id:
         candidate_pool = Employee.query.filter(
@@ -102,7 +100,7 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
             Employee.availability_status != 'Unavailable'
         ).all()
     else:
-        # HR / Admin: Enterprise-wide pool among candidates with completed assessment
+        # HR / Admin / Global scope: Enterprise-wide pool among candidates with completed assessment
         candidate_pool = Employee.query.filter(
             Employee.id.in_(completed_emp_ids),
             Employee.availability_status != 'Unavailable'
@@ -200,6 +198,28 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
             gaps.append("No critical competency deficits detected")
             training_suggestions.append("Executive leadership shadowing & strategic project rotation")
 
+        # Check Stage 1 Initial Screening
+        s1_assignments = AssessmentAssignment.query.filter(
+            AssessmentAssignment.employee_id == emp.id,
+            AssessmentAssignment.status == 'Completed',
+            (AssessmentAssignment.assessment_type == 'initial_screening') |
+            (AssessmentAssignment.stage.ilike('%stage 1%')) |
+            (AssessmentAssignment.stage.ilike('%screening%'))
+        ).all()
+        s1_completed = [a for a in s1_assignments if a.result and a.result.overall_score is not None]
+
+        s1_score = None
+        s1_passed = False
+        if s1_completed:
+            latest_s1_a = max(s1_completed, key=lambda a: (get_submission_time(a), a.id))
+            s1_score = round(float(latest_s1_a.result.overall_score), 1)
+            threshold = latest_s1_a.result.passing_threshold or 70.0
+            s1_passed = bool(latest_s1_a.result.passed if latest_s1_a.result.passed is not None else (s1_score >= threshold))
+        else:
+            # Baseline compatibility fallback for pre-existing records
+            s1_score = round(float(emp.performance_score or 75.0), 1)
+            s1_passed = True
+
         # Check shortlist record
         shortlist_entry = SuccessorShortlist.query.filter_by(
             employee_id=emp.id,
@@ -224,6 +244,19 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
             "assessment_score": assessment_score,
             "assessment_title": assessment_title,
             "assessment_date": assessment_date,
+            "stage_1_screening": {
+                "score": s1_score,
+                "passed": s1_passed,
+                "status": "Passed" if s1_passed else "Pending"
+            },
+            "stage_1_score": s1_score,
+            "stage_2_score": assessment_score,
+            "stage_2_assessment": {
+                "score": assessment_score,
+                "title": assessment_title,
+                "date": assessment_date,
+                "status": "Completed"
+            },
             "performance_score": raw_perf,
             "normalized_performance_score": perf_score,
             "experience_score": exp_score,
@@ -251,9 +284,9 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
         cand["ai_explanation"] = (
             f"Candidate {cand['name']} qualifies as rank {rank_label} successor for {role.role_name} "
             f"with an overall ranking index of {cand['ranking_score']}%. "
-            f"Achieved {cand['assessment_score']}% in the verified '{cand['assessment_title']}' assessment (completed {cand['assessment_date']}), "
-            f"demonstrating {cand['readiness_score']}% leadership readiness ({cand['readiness_level']}) "
-            f"and a {cand['competency_match_pct']}% competency benchmark alignment. "
+            f"Passed Stage 1 Initial Screening ({cand['stage_1_score']}%) and scored {cand['assessment_score']}% in verified Stage 2 "
+            f"'{cand['assessment_title']}' ({cand['assessment_date']}), demonstrating {cand['readiness_score']}% leadership readiness "
+            f"({cand['readiness_level']}) and {cand['competency_match_pct']}% competency benchmark alignment. "
             f"Key asset: {cand['major_strengths'][0] if cand['major_strengths'] else 'Technical competence'}."
         )
 

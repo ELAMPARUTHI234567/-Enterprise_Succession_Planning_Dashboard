@@ -145,7 +145,7 @@ export const authService = {
     });
   },
   getPendingRegistrations: () => api.get('/user-accounts/pending'),
-  approveUserAccount: (id) => api.post(`/user-accounts/${id}/approve`),
+  approveUserAccount: (id, data = {}) => api.post(`/user-accounts/${id}/approve`, data),
   rejectUserAccount: (id) => api.post(`/user-accounts/${id}/reject`),
   getMe: () => api.get('/me'),
   getUserAccounts: () => api.get('/user-accounts'),
@@ -291,6 +291,7 @@ export const assessmentService = {
   submitAssessment: (assignmentId, answers) => api.post(`/assessment-assignments/${assignmentId}/submit`, { answers }),
   getResult: (assignmentId) => api.get(`/assessment-results/${assignmentId}`),
   getCompletedResults: (params) => api.get('/assessment-results', { params }),
+  getEligibleScreenedEmployees: (params) => api.get('/hr/eligible-initial-screened-employees', { params }),
 
   // Module 5: HR Manual Scheduling & Timing Window Enforcement
   checkConflicts: (schedulesOrPayload) => {
@@ -406,6 +407,7 @@ export const vacancyService = {
 export const managerService = {
   getOverview: (params) => api.get('/manager/overview', { params }),
   getTeam: (params) => api.get('/manager/team', { params }),
+  assignInitialAssessment: (data) => api.post('/manager/assign-initial-assessment', data),
   getTeamMember: (empId) => api.get(`/manager/team/${empId}`),
   updateTeamMember: (empId, data) => api.put(`/manager/team/${empId}`, data),
   getTasks: (params) => api.get('/manager/tasks', { params }),

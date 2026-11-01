@@ -26,6 +26,37 @@ def run_schema_migrations(engine):
             else:
                 print("[MIGRATION] Table 'assessment_questions' schema verified (column 'explanation' present).")
 
+        # 1b. Migrate assessments table for two-stage assessment framework
+        if 'assessments' in tables:
+            ass_columns = [c['name'] for c in inspector.get_columns('assessments')]
+            if 'assessment_type' not in ass_columns:
+                print("[MIGRATION] Adding missing 'assessment_type' column to 'assessments' table...")
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE assessments ADD COLUMN assessment_type VARCHAR(50) DEFAULT 'leadership_role'"))
+                    print("[MIGRATION] Column 'assessment_type' added to 'assessments'.")
+                except Exception as e:
+                    print(f"[MIGRATION] Notice: Could not add 'assessment_type' to 'assessments': {str(e)}")
+
+            if 'stage' not in ass_columns:
+                print("[MIGRATION] Adding missing 'stage' column to 'assessments' table...")
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE assessments ADD COLUMN stage VARCHAR(50) DEFAULT 'Stage 2'"))
+                    print("[MIGRATION] Column 'stage' added to 'assessments'.")
+                except Exception as e:
+                    print(f"[MIGRATION] Notice: Could not add 'stage' to 'assessments': {str(e)}")
+
+            # In PostgreSQL, allow role_id to be nullable for general initial screening assessments
+            if is_pg:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE assessments ALTER COLUMN role_id DROP NOT NULL"))
+                    print("[MIGRATION] Dropped NOT NULL on assessments.role_id for PostgreSQL.")
+                except Exception as e:
+                    # Ignore if already nullable or fails
+                    pass
+
         # 2. Migrate question_bank table if present
         if 'question_bank' in tables:
             qb_columns = [c['name'] for c in inspector.get_columns('question_bank')]
@@ -79,7 +110,9 @@ def run_schema_migrations(engine):
                 ('submission_deadline', dt_type),
                 ('submitted_at', dt_type),
                 ('schedule_status', 'VARCHAR(30)'),
-                ('attempt_number', 'INTEGER DEFAULT 1')
+                ('attempt_number', 'INTEGER DEFAULT 1'),
+                ('assessment_type', "VARCHAR(50) DEFAULT 'leadership_role'"),
+                ('stage', "VARCHAR(50) DEFAULT 'Stage 2'")
             ]
             for col_name, col_type in new_aa_cols:
                 if col_name not in aa_columns:
@@ -102,6 +135,36 @@ def run_schema_migrations(engine):
                     print("[MIGRATION] Column 'assignment_question_id' added successfully to 'assessment_answers'.")
                 except Exception as col_err:
                     print(f"[MIGRATION] Notice: Could not add column 'assignment_question_id' to 'assessment_answers': {str(col_err)}")
+
+        # 5c. Migrate assessment_results table for Two-Stage Framework
+        if 'assessment_results' in tables:
+            ar_columns = [c['name'] for c in inspector.get_columns('assessment_results')]
+            new_ar_cols = [
+                ('passed', f'BOOLEAN {bool_false}'),
+                ('passing_threshold', 'FLOAT DEFAULT 70.0'),
+                ('assessment_type', "VARCHAR(50) DEFAULT 'leadership_role'"),
+                ('stage', "VARCHAR(50) DEFAULT 'Stage 2'")
+            ]
+            for col_name, col_type in new_ar_cols:
+                if col_name not in ar_columns:
+                    print(f"[MIGRATION] Adding missing '{col_name}' column to 'assessment_results' table...")
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(f"ALTER TABLE assessment_results ADD COLUMN {col_name} {col_type}"))
+                        print(f"[MIGRATION] Column '{col_name}' added successfully to 'assessment_results'.")
+                    except Exception as col_err:
+                        print(f"[MIGRATION] Notice: Could not add column '{col_name}' to 'assessment_results': {str(col_err)}")
+
+            # Backfill passed column if it was just added or has nulls
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        UPDATE assessment_results
+                        SET passed = (overall_score >= COALESCE(passing_threshold, 70.0))
+                        WHERE passed IS NULL
+                    """))
+            except Exception as e:
+                pass
 
         # 6. Migrate role_eligibility_configs table
         if 'role_eligibility_configs' in tables:
@@ -457,6 +520,9 @@ def create_performance_indexes(engine):
         ("idx_assign_questions_assign_id", "assignment_questions", "assignment_id"),
         ("idx_assess_answers_assign_id", "assessment_answers", "assignment_id"),
         ("idx_assess_results_assign_id", "assessment_results", "assignment_id"),
+        ("idx_assess_results_passed", "assessment_results", "passed"),
+        ("idx_assess_type_stg", "assessments", "assessment_type, stage"),
+        ("idx_assess_assign_type_stg", "assessment_assignments", "assessment_type, stage"),
         ("idx_succ_short_role_emp", "successor_shortlists", "role_id, employee_id"),
     ]
 

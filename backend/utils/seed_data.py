@@ -31,6 +31,7 @@ def seed_database_if_empty():
         print("[INFO] Database already contains data. Verifying built-in Question Bank & enhanced modules...")
         seed_question_bank()
         seed_enhanced_modules_baseline()
+        seed_two_stage_workflow_records()
         return
 
     print("[INFO] Seeding initial demonstration data into database...")
@@ -667,4 +668,106 @@ def seed_enhanced_modules_baseline():
     except Exception as e:
         db.session.rollback()
         print(f"[WARNING] Error in seed_enhanced_modules_baseline: {str(e)}")
+
+def seed_two_stage_workflow_records():
+    """
+    Idempotently ensures the Two-Stage Assessment & Succession Planning workflow
+    has baseline records grounded in actual database tables:
+    - Stage 1 Initial Screening Assessment template with 21 questions.
+    - Verified Stage 1 completions & passing scores for active employees.
+    - Diversity of screening statuses (Passed >= 70%, Failed < 70%, and Assigned).
+    """
+    try:
+        from utils.seed_question_bank import seed_initial_screening_template
+        seed_initial_screening_template()
+
+        screening_ass = Assessment.query.filter_by(assessment_type='initial_screening').first()
+        if not screening_ass:
+            return
+
+        hr_user = User.query.filter_by(role='HR').first()
+        hr_id = hr_user.id if hr_user else 1
+
+        # Ensure Manager Sneha Reddy (emp 4) has assigned direct reports [1, 2, 3, 8]
+        mgr4 = Employee.query.get(4)
+        if mgr4:
+            for eid in [1, 2, 3, 8]:
+                rep = Employee.query.get(eid)
+                if rep:
+                    rep.manager_id = 4
+            # Ensure employees 5, 7, 9 belong to other units for manager authorization isolation tests
+            for eid in [5, 7, 9]:
+                rep = Employee.query.get(eid)
+                if rep and rep.manager_id == 4:
+                    rep.manager_id = None
+
+        # Seed realistic Stage 1 results for key candidates across departments
+        # (emp_id, score, passed, is_completed)
+        sample_screenings = [
+            (1, 88.0, True, True),   # Arun Kumar - Passed (IT)
+            (2, 85.0, True, True),   # Priya Sharma - Passed (IT / Module Lead)
+            (3, 62.0, False, True),  # Rajesh Patel - Failed (< 70%)
+            (4, 92.0, True, True),   # Sneha Reddy - Passed (Operations)
+            (5, 89.0, True, True),   # Vikram Singh - Passed (Engineering)
+            (8, None, False, False), # Ananya Gupta - Assigned / Scheduled
+            (7, 58.0, False, True),  # Suresh Nair - Failed (< 70%)
+            (9, None, False, False), # Deepak Verma - Assigned / In-Progress
+        ]
+
+        seeded_stage1_count = 0
+        for eid, score, passed, is_comp in sample_screenings:
+            emp = Employee.query.get(eid)
+            if not emp:
+                continue
+
+            # Check if assignment already exists
+            existing_a = AssessmentAssignment.query.filter_by(
+                assessment_id=screening_ass.id,
+                employee_id=emp.id
+            ).first()
+
+            if not existing_a:
+                st = 'Completed' if is_comp else 'Scheduled'
+                assign = AssessmentAssignment(
+                    assessment_id=screening_ass.id,
+                    employee_id=emp.id,
+                    assigned_by=hr_id,
+                    assessment_type='initial_screening',
+                    stage='Stage 1: Initial Screening',
+                    status=st,
+                    schedule_status=st,
+                    scheduled_date='2026-10-15',
+                    start_time='10:00',
+                    end_time='10:30',
+                    duration_minutes=30,
+                    time_zone='IST (Asia/Kolkata)',
+                    instructions='Stage 1 General Competency Initial Screening',
+                    submitted_at=datetime.utcnow() if is_comp else None
+                )
+                db.session.add(assign)
+                db.session.flush()
+
+                if is_comp and score is not None:
+                    res = AssessmentResult(
+                        assignment_id=assign.id,
+                        overall_score=score,
+                        passed=passed,
+                        passing_threshold=70.0,
+                        assessment_type='initial_screening',
+                        stage='Stage 1: Initial Screening',
+                        readiness_level='High' if score >= 80.0 else 'Medium',
+                        completed_at=datetime.utcnow(),
+                        detail_json='{"Communication": 85, "Problem Solving": 88, "Teamwork": 90, "Technical Knowledge": 85, "Decision Making": 80, "Adaptability": 85, "Leadership": 82}'
+                    )
+                    db.session.add(res)
+
+                seeded_stage1_count += 1
+
+        db.session.commit()
+        if seeded_stage1_count > 0:
+            print(f"[SUCCESS] Grounded Stage 1 Initial Screening records for {seeded_stage1_count} employees.")
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[WARNING] Notice: Two-stage workflow baseline check: {str(e)}")
 

@@ -928,9 +928,21 @@ def get_pending_user_accounts():
         return jsonify({"success": False, "message": err_msg}), status
 
     pending_users = User.query.filter_by(status='Pending').order_by(User.created_at.desc()).all()
+    results = []
+    for u in pending_users:
+        u_dict = u.to_dict()
+        emp = Employee.query.filter_by(user_id=u.id).first()
+        if not emp and u.email:
+            emp = Employee.query.filter(
+                (db.func.lower(db.func.trim(Employee.email)) == u.email.lower()) |
+                (db.func.lower(db.func.trim(Employee.email)) == (u.oauth_email or '').lower())
+            ).first()
+        u_dict['employee_profile'] = emp.to_dict() if emp else None
+        results.append(u_dict)
+
     return jsonify({
         "success": True,
-        "data": [u.to_dict() for u in pending_users]
+        "data": results
     }), 200
 
 @auth_bp.route('/user-accounts/<int:user_id>/approve', methods=['POST'])
@@ -944,11 +956,38 @@ def approve_user_account(user_id):
         return jsonify({"success": False, "message": "User account not found"}), 404
 
     target_user.status = 'Active'
+
+    # Support optional manager assignment during HR approval
+    data = request.get_json(silent=True) or {}
+    manager_id = data.get('manager_id')
+
+    emp = Employee.query.filter_by(user_id=target_user.id).first()
+    if not emp:
+        emp = Employee.query.filter(
+            (db.func.lower(db.func.trim(Employee.email)) == (target_user.email or '').lower()) |
+            (db.func.lower(db.func.trim(Employee.email)) == (target_user.oauth_email or '').lower())
+        ).first()
+
+    if emp:
+        if not emp.user_id:
+            emp.user_id = target_user.id
+        if manager_id is not None:
+            if manager_id:
+                mgr = Employee.query.get(manager_id)
+                if mgr:
+                    emp.manager_id = mgr.id
+            else:
+                emp.manager_id = None
+
     db.session.commit()
+
+    user_dict = target_user.to_dict()
+    user_dict["employee"] = emp.to_dict() if emp else None
+    user_dict["user"] = target_user.to_dict()
 
     return jsonify({
         "success": True,
-        "data": target_user.to_dict(),
+        "data": user_dict,
         "message": f"Employee account for '{target_user.name or target_user.username}' has been approved and activated."
     }), 200
 

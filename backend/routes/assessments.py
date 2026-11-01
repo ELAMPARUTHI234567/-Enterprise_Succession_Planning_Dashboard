@@ -514,8 +514,10 @@ def submit_assessment(assignment_id):
 
     overall_score = round((total_achieved / total_possible * 100.0), 2) if total_possible > 0 else 80.0
     readiness_lvl = "High" if overall_score >= 80.0 else ("Medium" if overall_score >= 60.0 else "Low")
-
-    assignment.status = "Completed"
+    passing_threshold = assignment.assessment.passing_threshold if assignment.assessment and assignment.assessment.passing_threshold is not None else 70.0
+    passed = bool(overall_score >= passing_threshold)
+    ass_type = assignment.assessment_type or (assignment.assessment.assessment_type if assignment.assessment else 'leadership_role')
+    stage_val = assignment.stage or (assignment.assessment.stage if assignment.assessment else 'Stage 2')
 
     result = AssessmentResult.query.filter_by(assignment_id=assignment_id).first()
     if not result:
@@ -524,6 +526,10 @@ def submit_assessment(assignment_id):
     
     result.overall_score = overall_score
     result.readiness_level = readiness_lvl
+    result.passed = passed
+    result.passing_threshold = passing_threshold
+    result.assessment_type = ass_type
+    result.stage = stage_val
     result.completed_at = datetime.utcnow()
 
     # Update Employee Competency Scores in database
@@ -556,6 +562,8 @@ def submit_assessment(assignment_id):
     assignment.status = 'Completed'
     assignment.schedule_status = 'Completed'
     assignment.submitted_at = datetime.utcnow()
+    assignment.assessment_type = ass_type
+    assignment.stage = stage_val
     db.session.commit()
 
     target_role_id = assignment.assessment.role_id if assignment.assessment else 1
@@ -572,11 +580,134 @@ def submit_assessment(assignment_id):
             "total_score": round(total_achieved, 2),
             "total_possible": round(total_possible, 2),
             "readiness_level": readiness_lvl,
+            "passed": passed,
+            "passing_threshold": passing_threshold,
+            "assessment_type": ass_type,
+            "stage": stage_val,
             "competency_scores": detail,
             "updated_readiness": updated_readiness,
             "updated_gaps": updated_gap,
             "ml_prediction": ml_prediction
         }
+    }), 200
+
+@assessments_bp.route('/hr/eligible-initial-screened-employees', methods=['GET'])
+def get_eligible_initial_screened_employees():
+    """
+    Module 5: HR Eligible Employee Dashboard Endpoint.
+    Retrieves active employees who passed Stage 1 Initial Screening assessment (score >= 70%)
+    across the entire organization, eligible for Stage 2 leadership role assessments.
+    Supports filtering by department, manager_id, min_score, and search keyword.
+    """
+    user, _, err_msg, status = require_role('HR', 'Admin')
+    if err_msg:
+        return jsonify({"success": False, "message": err_msg}), status
+
+    dept_filter = request.args.get('department')
+    mgr_filter = request.args.get('manager_id', type=int)
+    min_score_filter = request.args.get('min_score', default=70.0, type=float)
+    search_q = (request.args.get('search') or '').strip().lower()
+
+    # Query all active employees with direct relationships
+    query = Employee.query.options(
+        db.joinedload(Employee.manager),
+        db.selectinload(Employee.assessment_assignments).joinedload(AssessmentAssignment.assessment),
+        db.selectinload(Employee.assessment_assignments).joinedload(AssessmentAssignment.result)
+    )
+
+    if dept_filter and dept_filter != 'All':
+        query = query.filter_by(department=dept_filter)
+    if mgr_filter:
+        query = query.filter_by(manager_id=mgr_filter)
+    if search_q:
+        query = query.filter(
+            (Employee.name.ilike(f"%{search_q}%")) |
+            (Employee.employee_code.ilike(f"%{search_q}%")) |
+            (Employee.email.ilike(f"%{search_q}%"))
+        )
+
+    all_employees = query.order_by(Employee.id.asc()).all()
+    eligible_list = []
+
+    for emp in all_employees:
+        # Find completed Stage 1 initial screening assignments
+        stage_1_assigns = [
+            a for a in emp.assessment_assignments
+            if a.status == 'Completed' and a.result and (
+                (a.assessment_type or '').lower() == 'initial_screening' or
+                (a.assessment and (a.assessment.assessment_type or '').lower() == 'initial_screening') or
+                (a.stage and 'stage 1' in a.stage.lower())
+            )
+        ]
+
+        if not stage_1_assigns:
+            continue
+
+        latest_s1 = max(stage_1_assigns, key=lambda x: (x.result.completed_at if x.result else datetime.min) or datetime.min)
+        res = latest_s1.result
+        score = res.overall_score if res else 0.0
+        threshold = res.passing_threshold if (res and res.passing_threshold is not None) else 70.0
+        is_passed = res.passed if (res and res.passed is not None) else (score >= threshold)
+
+        if not is_passed or score < min_score_filter:
+            continue
+
+        # Look for any Stage 2 leadership assignments
+        stage_2_assigns = [
+            a for a in emp.assessment_assignments
+            if (a.assessment_type or '').lower() == 'leadership_role' or
+               (a.stage and 'stage 2' in a.stage.lower()) or
+               (a.assessment and (a.assessment.assessment_type or '').lower() == 'leadership_role')
+        ]
+
+        s2_summary = []
+        for s2 in stage_2_assigns:
+            s2_res = s2.result
+            s2_summary.append({
+                "assignment_id": s2.id,
+                "assessment_id": s2.assessment_id,
+                "role_id": s2.assessment.role_id if s2.assessment else None,
+                "role_name": s2.assessment.role.role_name if s2.assessment and s2.assessment.role else "Leadership Role",
+                "status": s2.status,
+                "score": s2_res.overall_score if s2_res else None,
+                "passed": s2_res.passed if (s2_res and s2_res.passed is not None) else ((s2_res.overall_score >= 70.0) if s2_res else False),
+                "completed_at": s2_res.completed_at.isoformat() if s2_res and s2_res.completed_at else None
+            })
+
+        eligible_list.append({
+            "employee_id": emp.id,
+            "name": emp.name,
+            "employee_code": emp.employee_code,
+            "email": emp.email,
+            "department": emp.department,
+            "designation": emp.designation,
+            "experience_years": emp.experience_years,
+            "performance_score": emp.performance_score,
+            "leadership_score": emp.leadership_score,
+            "manager_id": emp.manager_id,
+            "manager_name": emp.manager.name if emp.manager else "Unassigned",
+            "stage_1_screening": {
+                "assignment_id": latest_s1.id,
+                "assessment_id": latest_s1.assessment_id,
+                "title": latest_s1.assessment.title if latest_s1.assessment else "Initial Screening",
+                "score": score,
+                "passing_threshold": threshold,
+                "passed": True,
+                "status": "Passed",
+                "completed_at": res.completed_at.isoformat() if res and res.completed_at else None
+            },
+            "stage_2_count": len(s2_summary),
+            "stage_2_assessments": s2_summary,
+            "eligible_for_stage_2": True
+        })
+
+    # Sort descending by Stage 1 score then experience
+    eligible_list.sort(key=lambda x: (x["stage_1_screening"]["score"], x["experience_years"]), reverse=True)
+
+    return jsonify({
+        "success": True,
+        "count": len(eligible_list),
+        "data": eligible_list
     }), 200
 
 @assessments_bp.route('/assessment-results', methods=['GET'])

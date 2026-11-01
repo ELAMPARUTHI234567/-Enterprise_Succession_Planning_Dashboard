@@ -860,9 +860,238 @@ def seed_question_bank():
         # Sync sample assessment questions if needed
         sync_sample_assessments_with_question_bank()
 
+        # Seed and verify Stage 1 Initial Screening Assessment Template
+        seed_initial_screening_template()
+
     except Exception as e:
         db.session.rollback()
         print(f"[WARNING] Error seeding question bank: {str(e)}")
+
+INITIAL_SCREENING_QUESTIONS = [
+    # 1. Communication
+    ("When conveying complex technical risks to non-technical business stakeholders, what is the most effective approach?",
+     ["A. Use detailed technical acronyms and stack traces to prove depth.",
+      "B. Translate technical impacts into business outcomes, timelines, and financial risks.",
+      "C. Avoid mentioning risks until they cause production outages.",
+      "D. Send automated raw metric graphs without explanatory commentary."],
+     "B", "Clear business-aligned communication translates technical details into actionable business trade-offs and impact.", "Communication", "Medium"),
+
+    ("In an asynchronous remote team, what is the best practice for documenting decisions made during ad-hoc discussions?",
+     ["A. Rely on participants remembering verbal agreements without writing them down.",
+      "B. Post a concise summary with action items, owners, and deadlines in the shared team channel.",
+      "C. Mention it informally in a 1-on-1 meeting next week.",
+      "D. Keep the notes private until the work is finished."],
+     "B", "Asynchronous team transparency requires prompt, documented action items in shared accessible spaces.", "Communication", "Easy"),
+
+    ("When receiving ambiguous feedback from a supervisor or client, how should an employee proceed?",
+     ["A. Guess the intent and complete the task based on unchecked assumptions.",
+      "B. Proactively ask clarifying questions with specific examples to align on expectations.",
+      "C. Ignore the feedback and proceed with the initial plan.",
+      "D. Express frustration to teammates before responding."],
+     "B", "Clarifying ambiguity early prevents rework and guarantees mutual alignment on delivery expectations.", "Communication", "Medium"),
+
+    # 2. Problem Solving
+    ("When confronting a recurring production issue whose root cause is unknown, what is the first step?",
+     ["A. Immediately reboot the system each time without investigation.",
+      "B. Gather telemetry, reproduce the anomaly, and conduct a structured 5-Whys root cause analysis.",
+      "C. Rewrite the entire codebase from scratch without testing.",
+      "D. Reassign the ticket to another department."],
+     "B", "Systematic problem solving relies on telemetry, reproduction, and root cause analysis rather than quick temporary patches.", "Problem Solving", "Hard"),
+
+    ("When multiple urgent bugs are reported simultaneously, how should priorities be determined?",
+     ["A. Fix whichever bug has the shortest code change.",
+      "B. Assess each issue's severity, business impact, and affected user count to triage systematically.",
+      "C. Fix them in the exact order they were reported.",
+      "D. Wait for management to triage every single issue."],
+     "B", "Impact and severity triage ensures mission-critical and high-customer-impact problems are prioritized first.", "Problem Solving", "Medium"),
+
+    ("A proposed solution resolves 80% of a critical performance bottleneck today, while a 100% solution takes 3 months. What is the optimal engineering trade-off?",
+     ["A. Reject the interim solution and suffer degraded performance for 3 months.",
+      "B. Implement the 80% fix now to mitigate user pain while scheduling the long-term architectural solution.",
+      "C. Postpone all development until consensus is 100% unanimous.",
+      "D. Reduce system capacity to mask the slowdown."],
+     "B", "Pragmatic iterative problem solving balances rapid risk mitigation with long-term architectural stability.", "Problem Solving", "Hard"),
+
+    # 3. Teamwork (Team Management)
+    ("How should an employee handle a disagreement with a team member regarding an architectural choice?",
+     ["A. Refuse to cooperate until the peer concedes.",
+      "B. Compare the trade-offs of both approaches objectively against project requirements and constraints.",
+      "C. Complain to HR about the disagreement.",
+      "D. Implement their own choice secretly without telling the team."],
+     "B", "Healthy collaboration evaluates options objectively using project criteria rather than personal pride.", "Team Management", "Medium"),
+
+    ("When a teammate is falling behind on their deliverables due to an unforeseen blocker, what is the best response?",
+     ["A. Point out their delay publicly in front of stakeholders.",
+      "B. Offer assistance, help troubleshoot the blocker, and coordinate rebalancing of tasks.",
+      "C. Mind your own work and let them face the consequences.",
+      "D. Take over all their responsibilities without informing them."],
+     "B", "High-performing teams support peers constructively and swarm on blockers to preserve team commitments.", "Team Management", "Easy"),
+
+    ("What is the primary characteristic of an inclusive and psychologically safe team environment?",
+     ["A. Nobody ever questions decisions or raises concerns.",
+      "B. Team members feel safe to take calculated risks, voice dissenting ideas, and acknowledge errors without fear of retribution.",
+      "C. Only senior staff are permitted to speak during meetings.",
+      "D. Mistakes are penalized with immediate public reprimands."],
+     "B", "Psychological safety fosters innovation, open communication, and collective accountability.", "Team Management", "Easy"),
+
+    # 4. Technical Knowledge
+    ("Why is version control (e.g., Git) essential in professional software engineering workflows?",
+     ["A. It only serves as a remote storage backup for code files.",
+      "B. It tracks historical changes, supports concurrent branching, facilitates code reviews, and enables reproducible builds.",
+      "C. It replaces automated unit testing completely.",
+      "D. It prevents developers from editing each other's code."],
+     "B", "Git provides traceability, safe parallel feature development, and collaborative code reviews.", "Technical Knowledge", "Easy"),
+
+    ("What is the primary architectural benefit of designing stateless web services?",
+     ["A. Eliminates the need for any database.",
+      "B. Simplifies horizontal scaling and improves resilience since any server instance can handle any incoming request.",
+      "C. Guarantees zero latency on all database transactions.",
+      "D. Removes the requirement for authentication tokens."],
+     "B", "Statelessness enables horizontal scalability across clusters because requests do not depend on session affinity.", "Technical Knowledge", "Medium"),
+
+    ("Which practice best ensures that database changes do not cause downtime or break live applications during deployment?",
+     ["A. Dropping and re-creating production tables during peak business hours.",
+      "B. Applying backward-compatible migrations with expand-and-contract patterns before deprecating old schemas.",
+      "C. Never altering the database schema once deployed.",
+      "D. Modifying production schemas manually without migration scripts."],
+     "B", "Expand-and-contract migration techniques enable zero-downtime rolling deployments.", "Technical Knowledge", "Hard"),
+
+    # 5. Decision Making
+    ("When required to make a technical decision with incomplete information and a tight deadline, what is the best approach?",
+     ["A. Freeze and refuse to decide until all information is 100% complete.",
+      "B. Identify key assumptions, weigh risks and reversible vs irreversible outcomes, and make an informed decision with monitoring.",
+      "C. Flip a coin to choose between options.",
+      "D. Delegate the decision to an intern to avoid personal liability."],
+     "B", "Sound decision making under uncertainty involves evaluating reversibility (two-way door decisions) and risk mitigation.", "Decision Making", "Hard"),
+
+    ("How should trade-offs between speed-to-market and code perfection be balanced?",
+     ["A. Never ship until code is theoretically perfect, regardless of missed commercial windows.",
+      "B. Always ship messy, untested code to meet arbitrary deadlines.",
+      "C. Deliver an MVP with robust testing and core quality, while deliberately tracking and scheduling acceptable technical debt.",
+      "D. Abandon all quality assurance practices for commercial software."],
+     "C", "Pragmatic engineering aligns business timelines with disciplined quality standards and deliberate technical debt management.", "Decision Making", "Medium"),
+
+    ("When post-launch metrics show that a newly launched feature is failing to achieve user adoption, what is the proper action?",
+     ["A. Conceal the data and claim the project was an unqualified success.",
+      "B. Analyze user drop-off data, collect qualitative user feedback, and iterate or pivot based on empirical evidence.",
+      "C. Force all existing users to use the feature whether they want it or not.",
+      "D. Blame the marketing department and delete the codebase."],
+     "B", "Data-driven decision making embraces empirical feedback loops to pivot or refine features iteratively.", "Decision Making", "Medium"),
+
+    # 6. Adaptability
+    ("How should an engineer respond when sudden organizational priorities require pivoting from their current technology stack to an unfamiliar one?",
+     ["A. Refuse the assignment and insist on working only with familiar tools.",
+      "B. Embrace the learning opportunity, identify core transferrable concepts, and rapidly upskill using documentation and best practices.",
+      "C. Complain to management about changing technologies.",
+      "D. Pretend to understand the new stack while writing low-quality code without reading documentation."],
+     "B", "Adaptability means leveraging foundational engineering concepts to swiftly master new technologies and domains.", "Adaptability", "Medium"),
+
+    ("During a release cut, a sudden upstream API change breaks critical functionality. How should you adapt?",
+     ["A. Panic and broadcast alarmist emails across the enterprise.",
+      "B. Stay calm, identify the breaking contract changes, apply an adapter/fallback pattern, and coordinate an updated release plan.",
+      "C. Blame the upstream team and suspend work for a week.",
+      "D. Turn off security checks and push broken code."],
+     "B", "Emotional resilience and adaptive problem solving ensure rapid stabilization during unexpected operational shocks.", "Adaptability", "Medium"),
+
+    ("When company processes or workflows change to meet new regulatory compliance requirements, what is the best mindset?",
+     ["A. Actively resist and bypass new compliance safeguards whenever possible.",
+      "B. Understand the rationale behind the compliance standards and integrate them smoothly into daily engineering workflows.",
+      "C. Threaten to resign whenever a new process is introduced.",
+      "D. Ignore the regulations and let legal handle any violations."],
+     "B", "Adaptive professionals view compliance and governance as integral facets of mature organizational reliability.", "Adaptability", "Easy"),
+
+    # 7. Basic Leadership Potential (Leadership)
+    ("Even without formal managerial authority, how can an individual contributor demonstrate leadership?",
+     ["A. By giving orders to peers and demanding compliance.",
+      "B. By taking ownership of outcomes, mentoring junior peers, proposing proactive solutions, and fostering positive morale.",
+      "C. By only doing the bare minimum tasks explicitly listed in their job description.",
+      "D. By criticizing leadership decisions behind closed doors."],
+     "B", "Everyday leadership is demonstrated through proactive ownership, influence, mentorship, and driving constructive outcomes.", "Leadership", "Easy"),
+
+    ("When a project experiences a setback under your technical guidance, what demonstrates true leadership maturity?",
+     ["A. Publicly assigning blame to the least experienced junior team member.",
+      "B. Owning the outcome transparently, leading the blameless post-mortem, and instituting preventative guardrails for the future.",
+      "C. Hiding the setback from leadership until someone else discovers it.",
+      "D. Quitting the project to preserve personal reputation."],
+     "B", "Accountability, transparency, and blameless continuous improvement are cornerstones of mature leadership.", "Leadership", "Hard"),
+
+    ("How should an emerging leader handle peer recognition?",
+     ["A. Claim credit for all team accomplishments during executive presentations.",
+      "B. Generously acknowledge team members' contributions and celebrate collective wins openly.",
+      "C. Downplay everyone's work except their own.",
+      "D. Discourage peers from presenting their own work to leadership."],
+     "B", "Great leaders elevate others, recognize diverse contributions, and amplify team visibility.", "Leadership", "Easy"),
+]
+
+def seed_initial_screening_template():
+    """
+    Seeds and ensures the existence of the official Stage 1 Initial Screening Assessment
+    'Employee General Competency Initial Screening' with 21 curated questions covering
+    the 7 mandatory competency pillars.
+    """
+    try:
+        first_role = LeadershipRole.query.first()
+        default_role_id = first_role.id if first_role else 1
+
+        screening_ass = Assessment.query.filter_by(assessment_type='initial_screening').first()
+        if not screening_ass:
+            # Check by title as backup
+            screening_ass = Assessment.query.filter_by(title="Employee General Competency Initial Screening").first()
+
+        if not screening_ass:
+            screening_ass = Assessment(
+                title="Employee General Competency Initial Screening",
+                description="Stage 1 mandatory screening assessment evaluating baseline competencies across Communication, Problem Solving, Teamwork, Technical Knowledge, Decision Making, Adaptability, and Basic Leadership Potential. Passing threshold: 70%.",
+                assessment_type="initial_screening",
+                stage="Stage 1: Initial Screening",
+                passing_threshold=70.0,
+                duration=30,
+                status="Active",
+                role_id=default_role_id
+            )
+            db.session.add(screening_ass)
+            db.session.commit()
+            print(f"[INFO] Created new Stage 1 Screening Assessment Template (ID: {screening_ass.id})")
+        else:
+            # Update attributes to ensure consistency
+            screening_ass.assessment_type = "initial_screening"
+            screening_ass.stage = "Stage 1: Initial Screening"
+            screening_ass.passing_threshold = 70.0
+            screening_ass.duration = 30
+            screening_ass.status = "Active"
+            if not screening_ass.role_id:
+                screening_ass.role_id = default_role_id
+            db.session.commit()
+
+        # Seed questions if missing or count < 21
+        existing_qs = AssessmentQuestion.query.filter_by(assessment_id=screening_ass.id).all()
+        if len(existing_qs) < len(INITIAL_SCREENING_QUESTIONS):
+            AssessmentQuestion.query.filter_by(assessment_id=screening_ass.id).delete()
+            comp_map = {c.name.lower(): c.id for c in Competency.query.all()}
+
+            for idx, (q_text, opts, corr, expl, comp_name, diff) in enumerate(INITIAL_SCREENING_QUESTIONS, start=1):
+                cid = comp_map.get(comp_name.lower())
+                aq = AssessmentQuestion(
+                    assessment_id=screening_ass.id,
+                    question=q_text,
+                    question_type="Multiple Choice",
+                    competency_id=cid,
+                    max_score=1.0,
+                    correct_answer=corr,
+                    explanation=expl,
+                    difficulty=diff,
+                    order_index=idx
+                )
+                aq.set_options(opts)
+                db.session.add(aq)
+            db.session.commit()
+            print(f"[SUCCESS] Seeded {len(INITIAL_SCREENING_QUESTIONS)} questions for Stage 1 Initial Screening Assessment.")
+        else:
+            print(f"[INFO] Stage 1 Initial Screening Assessment has {len(existing_qs)} verified questions.")
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[WARNING] Error seeding initial screening template: {str(e)}")
 
 def sync_sample_assessments_with_question_bank():
     """
