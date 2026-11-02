@@ -205,3 +205,4 @@ def sync_all_employee_accounts(target_password="employee123", sync_supabase=True
         report["error"] = str(e)
         print(f"[EMPLOYEE SYNC] Error synchronizing employee accounts: {str(e)}")
         return report
+

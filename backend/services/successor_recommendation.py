@@ -237,6 +237,8 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
             "department": emp.department,
             "designation": emp.designation,
             "experience_years": emp.experience_years,
+            "manager_id": emp.manager_id,
+            "manager_name": emp.manager.name if emp.manager else "Unassigned",
             "ranking_score": ranking_score,
             "competency_match_pct": comp_match,
             "readiness_score": readiness_score,
@@ -290,7 +292,24 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
             f"Key asset: {cand['major_strengths'][0] if cand['major_strengths'] else 'Technical competence'}."
         )
 
-    # 5. Transparent Notice when fewer than 3 qualify
+    # 5. Calculate Stage 2 assessment score ranking separately
+    stage_2_sorted = sorted(
+        qualified_candidates,
+        key=lambda c: (c["stage_2_score"], c["ranking_score"], c["readiness_score"]),
+        reverse=True
+    )
+    stage_2_rankings = []
+    for idx, c_item in enumerate(stage_2_sorted[:3]):
+        cand_copy = dict(c_item)
+        cand_copy["rank"] = idx + 1
+        cand_copy["stage_2_rank"] = idx + 1
+        cand_copy["ai_explanation"] = (
+            f"Candidate {cand_copy['name']} achieved rank #{idx + 1} by Stage 2 Leadership Assessment score ({cand_copy['stage_2_score']}%) "
+            f"for {role.role_name}, with overall ranking index {cand_copy['ranking_score']}% and readiness {cand_copy['readiness_score']}%."
+        )
+        stage_2_rankings.append(cand_copy)
+
+    # 6. Transparent Notice when fewer than 3 qualify
     if len(top_candidates) == 0:
         notice = (
             f"No candidates currently satisfy all mandatory prerequisites and possess completed "
@@ -317,6 +336,7 @@ def get_top_3_successors(role_id, current_user=None, current_employee=None, mana
         "total_evaluated": evaluated_count,
         "total_eligible": len(qualified_candidates),
         "top_candidates": top_candidates,
+        "stage_2_rankings": stage_2_rankings,
         "notice": notice,
         "governance_note": "Evaluations strictly require active employment, prerequisite eligibility, and role-specific assessment completion."
     }

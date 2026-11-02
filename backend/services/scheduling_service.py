@@ -266,9 +266,11 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
     if incomplete_employees:
         return None, f"Incomplete schedule: HR must explicitly enter Date, Start Time, and Duration for every employee. Missing details for: {', '.join(incomplete_employees)}.", 400
 
-    # 2. Enforce Pre-Assessment Eligibility Check (applied to Stage 2 leadership role assessments)
+    # 2. Enforce Stage 1 Initial Screening Pass & Pre-Assessment Eligibility (applied to Stage 2 leadership role assessments)
     if (assessment.assessment_type or '').lower() != 'initial_screening':
         ineligible_employees = []
+        duplicate_employees = []
+
         for s in schedules_input:
             emp_id = s.get('employee_id')
             if not emp_id:
@@ -277,15 +279,50 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
             if not emp_obj:
                 return None, f"Invalid employee ID #{emp_id} in schedule list", 404
 
+            emp_name = emp_obj.name or f"Employee #{emp_id}"
+
+            # Step A: Enforce Stage 1 Initial Screening completion with passing benchmark (>=70%)
+            stage_1_assigns = [
+                a for a in emp_obj.assessment_assignments
+                if a.status == 'Completed' and a.result and (
+                    (a.assessment_type or '').lower() == 'initial_screening' or
+                    (a.assessment and (a.assessment.assessment_type or '').lower() == 'initial_screening') or
+                    (a.stage and 'stage 1' in a.stage.lower())
+                )
+            ]
+            has_passed_s1 = False
+            if stage_1_assigns:
+                latest_s1 = max(stage_1_assigns, key=lambda x: (x.result.completed_at if x.result else datetime.min) or datetime.min)
+                res = latest_s1.result
+                thresh = res.passing_threshold if (res and res.passing_threshold is not None) else 70.0
+                has_passed_s1 = res.passed if (res and res.passed is not None) else (res.overall_score >= thresh)
+
+            if not has_passed_s1:
+                ineligible_employees.append(f"{emp_name} (Stage 1 Initial Screening not passed with score >=70%)")
+                continue
+
+            # Step B: Prevent duplicate active Stage 2 assignment for the same assessment
+            existing_active_s2 = AssessmentAssignment.query.filter(
+                AssessmentAssignment.employee_id == emp_id,
+                AssessmentAssignment.assessment_id == assessment.id,
+                AssessmentAssignment.status.in_(['Assigned', 'Scheduled', 'In Progress', 'In-Progress'])
+            ).first()
+            if existing_active_s2:
+                duplicate_employees.append(f"{emp_name} (Active {assessment.title or 'Stage 2'} assignment already exists)")
+                continue
+
+            # Step C: Pre-assessment eligibility check
             target_role_id = assessment.role_id if assessment.role_id else 1
             elig = evaluate_pre_assessment_eligibility(emp_id, target_role_id, employee=emp_obj)
             if not elig or not elig.get("is_eligible"):
-                emp_name = emp_obj.name or f"Employee #{emp_id}"
                 reasons_str = "; ".join(elig.get("unmet_requirements", ["Unmet role prerequisites"])) if elig else "Failed eligibility"
                 ineligible_employees.append(f"{emp_name} ({reasons_str})")
 
+        if duplicate_employees:
+            return None, f"Duplicate assignment detected: {'; '.join(duplicate_employees)}", 409
+
         if ineligible_employees:
-            return None, f"Pre-assessment eligibility check failed. The following employee(s) do not meet target role prerequisites: {'; '.join(ineligible_employees)}", 422
+            return None, f"Stage 2 Leadership Assessment eligibility check failed: {'; '.join(ineligible_employees)}", 422
 
     # 3. Check conflicts
     conflict_check = check_scheduling_conflicts(schedules_input)

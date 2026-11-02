@@ -20,6 +20,7 @@ export const AITop3SuccessorsSection = ({ isManager = false, onNavigateProfile }
   const [comparisonModalOpen, setComparisonModalOpen] = useState(false);
   const [comparisonData, setComparisonData] = useState(null);
   const [comparing, setComparing] = useState(false);
+  const [rankingViewMode, setRankingViewMode] = useState('multi_factor'); // 'multi_factor' | 'stage_2_score'
 
   // Shortlist action loading
   const [shortlistActionEmpId, setShortlistActionEmpId] = useState(null);
@@ -136,7 +137,15 @@ export const AITop3SuccessorsSection = ({ isManager = false, onNavigateProfile }
   };
 
   const currentRole = roles.find(r => r.id === Number(selectedRoleId)) || (data && data.role);
-  const candidates = data?.top_candidates || [];
+  const candidates = useMemo(() => {
+    if (rankingViewMode === 'stage_2_score') {
+      if (data?.stage_2_rankings && data.stage_2_rankings.length > 0) {
+        return data.stage_2_rankings;
+      }
+      return [...(data?.top_candidates || [])].sort((a, b) => (b.stage_2_score ?? b.assessment_score ?? 0) - (a.stage_2_score ?? a.assessment_score ?? 0));
+    }
+    return data?.top_candidates || [];
+  }, [data, rankingViewMode]);
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden mb-8 transition-all">
@@ -195,6 +204,46 @@ export const AITop3SuccessorsSection = ({ isManager = false, onNavigateProfile }
               <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
           </div>
+        </div>
+
+        {/* Ranking Mode View Toggle */}
+        <div className="mt-4 pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center space-x-2">
+            <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">Ranking Mode:</span>
+            <div className="inline-flex rounded-xl bg-slate-800 p-1 border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setRankingViewMode('multi_factor')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center space-x-1.5 ${
+                  rankingViewMode === 'multi_factor'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>🏆 Multi-Factor Successor Ranking</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setRankingViewMode('stage_2_score')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center space-x-1.5 ${
+                  rankingViewMode === 'stage_2_score'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>📊 Stage 2 Assessment Score Ranking</span>
+              </button>
+            </div>
+          </div>
+          {rankingViewMode === 'stage_2_score' ? (
+            <span className="text-[11px] text-emerald-400 font-medium">
+              Ranked strictly by verified Stage 2 Leadership Assessment score.
+            </span>
+          ) : (
+            <span className="text-[11px] text-indigo-300 font-medium">
+              Multi-factor index: Competencies (30%) + Readiness (30%) + Assessment (20%) + Performance (10%) + Experience (10%).
+            </span>
+          )}
         </div>
 
         {/* Comparison Trigger Pill */}
@@ -358,6 +407,17 @@ export const AITop3SuccessorsSection = ({ isManager = false, onNavigateProfile }
                             <span className="inline-block mt-0.5 text-[10px] font-mono text-slate-400">
                               {cand.employee_code}
                             </span>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold border border-slate-200">
+                                Mgr: {cand.manager_name || 'Unassigned'}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold border border-slate-200">
+                                Exp: {cand.experience_years}y
+                              </span>
+                              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold border border-slate-200">
+                                Perf: {cand.performance_score}/5.0
+                              </span>
+                            </div>
                           </div>
                           <StatusBadge status={cand.readiness_level} type="readiness" />
                         </div>

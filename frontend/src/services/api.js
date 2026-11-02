@@ -408,6 +408,7 @@ export const vacancyService = {
 export const managerService = {
   getOverview: (params) => api.get('/manager/overview', { params }),
   getTeam: (params) => api.get('/manager/team', { params }),
+  getAssessmentEligibleEmployees: (params) => api.get('/manager/assessment-eligible-employees', { params }),
   assignInitialAssessment: (data) => api.post('/manager/assign-initial-assessment', data),
   getTeamMember: (empId) => api.get(`/manager/team/${empId}`),
   updateTeamMember: (empId, data) => api.put(`/manager/team/${empId}`, data),

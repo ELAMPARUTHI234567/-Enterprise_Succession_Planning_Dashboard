@@ -439,31 +439,226 @@ def get_team_members():
             scr_res = latest_scr_a.result
             threshold = scr_res.passing_threshold if scr_res.passing_threshold is not None else 70.0
             is_passed = scr_res.passed if scr_res.passed is not None else (scr_res.overall_score >= threshold)
-            emp_dict["initial_screening_status"] = "Passed" if is_passed else "Failed"
+            st_label = "Completed – Passed" if is_passed else "Completed – Failed"
+            completed_date_str = scr_res.completed_at.strftime('%Y-%m-%d') if scr_res.completed_at else None
+
+            emp_dict["initial_screening_status"] = st_label
             emp_dict["initial_screening_score"] = round(scr_res.overall_score, 1)
             emp_dict["initial_screening_passed"] = bool(is_passed)
-            emp_dict["initial_screening_date"] = scr_res.completed_at.strftime('%Y-%m-%d') if scr_res.completed_at else None
+            emp_dict["initial_screening_date"] = completed_date_str
             emp_dict["eligible_for_hr"] = bool(is_passed)
             emp_dict["initial_screening_assignment_id"] = latest_scr_a.id
+
+            emp_dict["assessment_assignment_status"] = "Assigned"
+            emp_dict["assessment_start_status"] = "Started"
+            emp_dict["assessment_completion_status"] = "Completed"
+            emp_dict["assessment_score_pct"] = round(scr_res.overall_score, 1)
+            emp_dict["passing_benchmark"] = threshold
+            emp_dict["pass_fail_result"] = "Pass" if is_passed else "Fail"
+            emp_dict["assessment_submission_timestamp"] = scr_res.completed_at.isoformat() if scr_res.completed_at else None
+            emp_dict["hr_eligibility_status"] = "Eligible" if is_passed else "Ineligible"
         elif screening_assigns:
             latest_scr_a = screening_assigns[-1]
-            emp_dict["initial_screening_status"] = "Assigned"
+            real_st = latest_scr_a.get_real_status()
+            if real_st == 'Expired':
+                st_label = "Expired"
+                start_st = "Started" if latest_scr_a.actual_start_time else "Not Started"
+                comp_st = "Expired"
+            elif real_st in ['In Progress', 'In-Progress'] or latest_scr_a.actual_start_time:
+                st_label = "In Progress"
+                start_st = "Started"
+                comp_st = "In Progress"
+            else:
+                st_label = "Assigned"
+                start_st = "Not Started"
+                comp_st = "Not Completed"
+
+            emp_dict["initial_screening_status"] = st_label
             emp_dict["initial_screening_score"] = None
             emp_dict["initial_screening_passed"] = False
             emp_dict["initial_screening_date"] = latest_scr_a.scheduled_date
             emp_dict["eligible_for_hr"] = False
             emp_dict["initial_screening_assignment_id"] = latest_scr_a.id
+
+            emp_dict["assessment_assignment_status"] = "Assigned"
+            emp_dict["assessment_start_status"] = start_st
+            emp_dict["assessment_completion_status"] = comp_st
+            emp_dict["assessment_score_pct"] = None
+            emp_dict["passing_benchmark"] = 70.0
+            emp_dict["pass_fail_result"] = "Pending"
+            emp_dict["assessment_submission_timestamp"] = None
+            emp_dict["hr_eligibility_status"] = "Ineligible"
         else:
-            emp_dict["initial_screening_status"] = "Awaiting Assessment"
+            emp_dict["initial_screening_status"] = "Not Assigned"
             emp_dict["initial_screening_score"] = None
             emp_dict["initial_screening_passed"] = False
             emp_dict["initial_screening_date"] = None
             emp_dict["eligible_for_hr"] = False
             emp_dict["initial_screening_assignment_id"] = None
 
+            emp_dict["assessment_assignment_status"] = "Not Assigned"
+            emp_dict["assessment_start_status"] = "Not Started"
+            emp_dict["assessment_completion_status"] = "Not Completed"
+            emp_dict["assessment_score_pct"] = None
+            emp_dict["passing_benchmark"] = 70.0
+            emp_dict["pass_fail_result"] = "Not Applicable"
+            emp_dict["assessment_submission_timestamp"] = None
+            emp_dict["hr_eligibility_status"] = "Ineligible"
+
         data.append(emp_dict)
 
     return jsonify({"success": True, "data": data}), 200
+
+
+@manager_bp.route('/assessment-eligible-employees', methods=['GET'])
+def get_assessment_eligible_employees():
+    """
+    Retrieves all active, approved organization employees eligible for Stage 1 initial screening assignment.
+    Accessible by Managers and HR.
+    Supports filtering by:
+    - department
+    - manager_id
+    - status ('All', 'Not Assigned', 'Assigned', 'In Progress', 'Completed – Passed', 'Completed – Failed', 'Expired')
+    - search (keyword across name, employee_code, email, designation)
+    - awaiting_only ('true' / 'false')
+    """
+    user, mgr_emp, is_hr, err = get_authorized_manager_context()
+    if err:
+        return err
+
+    dept_filter = request.args.get('department')
+    mgr_filter = request.args.get('manager_id', type=int)
+    status_filter = request.args.get('status')
+    search_q = (request.args.get('search') or '').strip().lower()
+    awaiting_only = request.args.get('awaiting_only', '').strip().lower() in ['true', '1', 'yes']
+
+    # Query all active employees across organization
+    query = Employee.query.options(
+        db.joinedload(Employee.manager),
+        db.joinedload(Employee.user),
+        db.selectinload(Employee.assessment_assignments).joinedload(AssessmentAssignment.assessment),
+        db.selectinload(Employee.assessment_assignments).joinedload(AssessmentAssignment.result)
+    ).filter(
+        Employee.availability_status != 'Unavailable'
+    )
+
+    if dept_filter and dept_filter != 'All':
+        query = query.filter_by(department=dept_filter)
+    if mgr_filter:
+        query = query.filter_by(manager_id=mgr_filter)
+    if search_q:
+        query = query.filter(
+            (Employee.name.ilike(f"%{search_q}%")) |
+            (Employee.employee_code.ilike(f"%{search_q}%")) |
+            (Employee.email.ilike(f"%{search_q}%")) |
+            (Employee.designation.ilike(f"%{search_q}%"))
+        )
+
+    all_employees = query.order_by(Employee.name.asc()).all()
+    results = []
+
+    for emp in all_employees:
+        # Exclude inactive or pending/rejected users if linked
+        if emp.user and emp.user.status and emp.user.status.lower() in ['pending', 'rejected', 'inactive', 'suspended']:
+            continue
+
+        screening_assigns = [
+            a for a in emp.assessment_assignments
+            if (a.assessment_type or '').lower() == 'initial_screening' or
+               (a.assessment and (a.assessment.assessment_type or '').lower() == 'initial_screening') or
+               (a.stage and 'stage 1' in a.stage.lower())
+        ]
+        completed_screenings = [a for a in screening_assigns if a.status == 'Completed' and a.result]
+
+        can_assign = False
+        score_val = None
+        passed_val = False
+        benchmark = 70.0
+        submission_ts = None
+        completed_date_str = None
+        active_assignment_id = None
+
+        if completed_screenings:
+            latest_scr_a = max(completed_screenings, key=lambda x: (x.result.completed_at if x.result else datetime.min) or datetime.min)
+            scr_res = latest_scr_a.result
+            benchmark = scr_res.passing_threshold if scr_res.passing_threshold is not None else 70.0
+            is_passed = scr_res.passed if scr_res.passed is not None else (scr_res.overall_score >= benchmark)
+            passed_val = bool(is_passed)
+            score_val = round(scr_res.overall_score, 1)
+            submission_ts = scr_res.completed_at.isoformat() if scr_res.completed_at else None
+            completed_date_str = scr_res.completed_at.strftime('%Y-%m-%d') if scr_res.completed_at else None
+            active_assignment_id = latest_scr_a.id
+            if is_passed:
+                status_label = "Completed – Passed"
+                can_assign = False # Already passed Stage 1, qualifies for HR Stage 2
+            else:
+                status_label = "Completed – Failed"
+                can_assign = True  # Allowed to re-assign Stage 1 after failure
+        elif screening_assigns:
+            latest_scr_a = screening_assigns[-1]
+            real_st = latest_scr_a.get_real_status()
+            active_assignment_id = latest_scr_a.id
+            if real_st == 'Expired':
+                status_label = "Expired"
+                can_assign = True # Expired window allows re-assignment
+            elif real_st in ['In Progress', 'In-Progress'] or latest_scr_a.actual_start_time:
+                status_label = "In Progress"
+                can_assign = False
+            else:
+                status_label = "Assigned"
+                can_assign = False
+        else:
+            status_label = "Not Assigned"
+            can_assign = True
+
+        # Status filtering
+        if status_filter and status_filter != 'All':
+            if status_filter in ['Awaiting Assessment', 'Can Assign']:
+                if not can_assign:
+                    continue
+            elif status_filter == 'Passed' and status_label != 'Completed – Passed':
+                continue
+            elif status_filter == 'Failed' and status_label != 'Completed – Failed':
+                continue
+            elif status_filter not in ['Passed', 'Failed', 'Awaiting Assessment', 'Can Assign'] and status_label != status_filter:
+                continue
+
+        if awaiting_only and not can_assign:
+            continue
+
+        is_direct = bool(mgr_emp and emp.manager_id == mgr_emp.id)
+
+        results.append({
+            "id": emp.id,
+            "employee_id": emp.id,
+            "employee_code": emp.employee_code,
+            "name": emp.name,
+            "email": emp.email,
+            "department": emp.department,
+            "designation": emp.designation,
+            "experience_years": emp.experience_years,
+            "performance_score": emp.performance_score,
+            "manager_id": emp.manager_id,
+            "manager_name": emp.manager.name if emp.manager else "Unassigned",
+            "is_direct_report": is_direct,
+            "assignment_status": status_label,
+            "initial_screening_status": status_label,
+            "can_assign": can_assign,
+            "score": score_val,
+            "passed": passed_val,
+            "passing_benchmark": benchmark,
+            "submission_timestamp": submission_ts,
+            "submission_date": completed_date_str,
+            "hr_eligibility_status": "Eligible" if passed_val else "Ineligible",
+            "eligible_for_hr": bool(passed_val),
+            "active_assignment_id": active_assignment_id
+        })
+
+    return jsonify({
+        "success": True,
+        "total": len(results),
+        "data": results
+    }), 200
 
 
 @manager_bp.route('/assign-initial-assessment', methods=['POST'])
@@ -496,7 +691,6 @@ def assign_initial_assessment():
 
     created_assignments = []
     skipped_duplicates = []
-    unauthorized_employees = []
 
     from services.scheduling_service import create_utc_datetime, calculate_end_time_str
     end_time_str = calculate_end_time_str(start_time, duration_minutes)
@@ -508,11 +702,6 @@ def assign_initial_assessment():
         if not emp:
             continue
 
-        # RBAC Check: Manager can only assign to direct reports (unless HR/Admin)
-        if not is_hr and emp.manager_id != mgr_emp.id:
-            unauthorized_employees.append(emp.name or f"Employee #{eid}")
-            continue
-
         # Prevent duplicate active assignment: Check if already has active (non-completed) or passed
         existing_assign = AssessmentAssignment.query.filter(
             AssessmentAssignment.employee_id == emp.id,
@@ -522,18 +711,20 @@ def assign_initial_assessment():
 
         has_active_or_passed = False
         for ea in existing_assign:
-            if ea.status != 'Completed':
-                has_active_or_passed = True
-                break
-            elif ea.result:
-                threshold = ea.result.passing_threshold if ea.result.passing_threshold is not None else 70.0
-                is_pass = ea.result.passed if ea.result.passed is not None else (ea.result.overall_score >= threshold)
-                if is_pass:
+            if ea.status == 'Completed':
+                if ea.result:
+                    threshold = ea.result.passing_threshold if ea.result.passing_threshold is not None else 70.0
+                    is_pass = ea.result.passed if ea.result.passed is not None else (ea.result.overall_score >= threshold)
+                    if is_pass:
+                        has_active_or_passed = True
+                        break
+            else:
+                if ea.get_real_status() != 'Expired':
                     has_active_or_passed = True
                     break
 
         if has_active_or_passed:
-            skipped_duplicates.append(emp.name)
+            skipped_duplicates.append(emp.name or f"Employee #{eid}")
             continue
 
         assignment = AssessmentAssignment(
@@ -581,10 +772,11 @@ def assign_initial_assessment():
 
         # Create notification if user linked
         if emp.user_id:
+            mgr_label = mgr_emp.name if mgr_emp else "Management"
             db.session.add(Notification(
                 user_id=emp.user_id,
                 title="Stage 1 Initial Screening Assigned",
-                message=f"Your manager {mgr_emp.name} has scheduled your Stage 1 Initial Screening for {scheduled_date} at {start_time}.",
+                message=f"Manager {mgr_label} has scheduled your Stage 1 Initial Screening for {scheduled_date} at {start_time}.",
                 type="assessment_assigned",
                 link="/employee-dashboard"
             ))
@@ -592,12 +784,6 @@ def assign_initial_assessment():
         created_assignments.append(assignment.to_dict())
 
     db.session.commit()
-
-    if unauthorized_employees:
-        return jsonify({
-            "success": False,
-            "message": f"Access forbidden: You cannot assign assessments to non-direct reports: {', '.join(unauthorized_employees)}"
-        }), 403
 
     msg = f"Successfully assigned Stage 1 Initial Screening to {len(created_assignments)} employee(s)."
     if skipped_duplicates:

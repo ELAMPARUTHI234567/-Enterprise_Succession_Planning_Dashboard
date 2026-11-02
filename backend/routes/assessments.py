@@ -119,6 +119,40 @@ def assign_assessment(assessment_id):
         if emp_target.manager_id != employee.id and emp_target.id != employee.id:
             return jsonify({"success": False, "message": "Access forbidden: Managers can only assign assessments to direct reports."}), 403
 
+    # Stage 1 Prerequisite and Duplicate Check (for Stage 2 Leadership Assessments)
+    if (assessment.assessment_type or '').lower() != 'initial_screening':
+        stage_1_assigns = [
+            a for a in emp_target.assessment_assignments
+            if a.status == 'Completed' and a.result and (
+                (a.assessment_type or '').lower() == 'initial_screening' or
+                (a.assessment and (a.assessment.assessment_type or '').lower() == 'initial_screening') or
+                (a.stage and 'stage 1' in a.stage.lower())
+            )
+        ]
+        has_passed_s1 = False
+        if stage_1_assigns:
+            latest_s1 = max(stage_1_assigns, key=lambda x: (x.result.completed_at if x.result else datetime.min) or datetime.min)
+            res = latest_s1.result
+            thresh = res.passing_threshold if (res and res.passing_threshold is not None) else 70.0
+            has_passed_s1 = res.passed if (res and res.passed is not None) else (res.overall_score >= thresh)
+
+        if not has_passed_s1:
+            return jsonify({
+                "success": False,
+                "message": f"Stage 2 Leadership Assessment requires completing and passing Stage 1 Initial Screening (≥70%). Employee '{emp_target.name}' has not passed Stage 1."
+            }), 422
+
+        existing_active = AssessmentAssignment.query.filter(
+            AssessmentAssignment.employee_id == employee_id,
+            AssessmentAssignment.assessment_id == assessment.id,
+            AssessmentAssignment.status.in_(['Assigned', 'Scheduled', 'In Progress', 'In-Progress'])
+        ).first()
+        if existing_active:
+            return jsonify({
+                "success": False,
+                "message": f"Employee '{emp_target.name}' already has an active assignment for '{assessment.title}'."
+            }), 409
+
     # Enforce Pre-Assessment Eligibility Check
     target_role_id = assessment.role_id if assessment.role_id else 1
     elig = evaluate_pre_assessment_eligibility(employee_id, target_role_id, employee=emp_target)
@@ -717,11 +751,27 @@ def get_assessment_results():
         return jsonify({"success": False, "message": err_msg}), status
 
     try:
+        include_all = request.args.get('include_all', 'false').strip().lower() in ['true', '1', 'yes']
+        status_filter = request.args.get('status', '').strip()
+
         query = AssessmentAssignment.query.options(
             db.joinedload(AssessmentAssignment.assessment),
             db.joinedload(AssessmentAssignment.employee),
             db.joinedload(AssessmentAssignment.result)
-        ).filter_by(status='Completed')
+        )
+
+        # Status filtering on the initial query
+        if not include_all and (not status_filter or status_filter == 'Completed'):
+            query = query.filter_by(status='Completed')
+        elif status_filter and status_filter not in ['All', '']:
+            if status_filter == 'Completed':
+                query = query.filter_by(status='Completed')
+            elif status_filter in ['Assigned', 'Scheduled']:
+                query = query.filter(AssessmentAssignment.status.in_(['Assigned', 'Scheduled']))
+            elif status_filter in ['In Progress', 'In-Progress']:
+                query = query.filter(AssessmentAssignment.status.in_(['In Progress', 'In-Progress', 'Scheduled']))
+            elif status_filter in ['Passed', 'Failed']:
+                query = query.filter_by(status='Completed')
 
         # RBAC Data Isolation
         if user.role.lower() not in ['hr', 'admin']:
@@ -732,7 +782,11 @@ def get_assessment_results():
                     (Employee.manager_id == employee.id) | (Employee.id == employee.id)
                 ).all()
                 team_ids = [e.id for e in team_members]
-                query = query.filter(AssessmentAssignment.employee_id.in_(team_ids))
+                # Manager sees direct reports OR assessments they assigned
+                query = query.filter(
+                    (AssessmentAssignment.employee_id.in_(team_ids)) |
+                    (AssessmentAssignment.assigned_by == user.id)
+                )
             else: # Employee
                 if not employee:
                     return jsonify({"success": True, "data": []}), 200
@@ -811,23 +865,81 @@ def get_assessment_results():
 
         results_list = []
         for a in completed_assignments:
-            if not a.result:
+            real_st = a.get_real_status()
+            is_completed = (a.status == 'Completed' and a.result is not None)
+            stage_name = a.stage or ("Stage 1: Initial Screening" if (a.assessment_type or '').lower() == 'initial_screening' else "Stage 2: Leadership Role")
+            pass_score = (a.result.passing_threshold if (a.result and a.result.passing_threshold is not None) else (a.assessment.passing_threshold if a.assessment else 70.0))
+
+            if not is_completed:
+                # If uncompleted assignments not requested, skip
+                if not include_all and (not status_filter or status_filter in ['Completed', 'Passed', 'Failed']):
+                    continue
+                if status_filter == 'In Progress' and real_st != 'In Progress':
+                    continue
+                if status_filter in ['Assigned', 'Scheduled'] and real_st not in ['Assigned', 'Scheduled', 'Available']:
+                    continue
+
+                rdata = {
+                    "id": a.id,
+                    "assignment_id": a.id,
+                    "assignment": a.to_dict(),
+                    "employee_id": a.employee_id,
+                    "employee_name": a.employee.name if a.employee else "",
+                    "employee_code": a.employee.employee_code if a.employee else "",
+                    "email": a.employee.email if a.employee else "",
+                    "department": a.employee.department if a.employee else "",
+                    "designation": a.employee.designation if a.employee else "",
+                    "manager_id": a.employee.manager_id if a.employee else None,
+                    "manager_name": a.employee.manager.name if (a.employee and a.employee.manager) else "Unassigned",
+                    "assessment_id": a.assessment_id,
+                    "assessment_title": a.assessment.title if a.assessment else "",
+                    "assessment_stage": stage_name,
+                    "stage": stage_name,
+                    "role_id": a.assessment.role_id if a.assessment else 1,
+                    "role_name": a.assessment.role.role_name if a.assessment and a.assessment.role else "",
+                    "overall_score": None,
+                    "score": None,
+                    "normalized_percentage": None,
+                    "total_score": None,
+                    "total_possible": 100.0,
+                    "passing_score": pass_score,
+                    "passing_threshold": pass_score,
+                    "result": "Pending",
+                    "passed": None,
+                    "completion_date": None,
+                    "submission_date": None,
+                    "status": real_st,
+                    "hr_eligibility": "Ineligible",
+                    "eligible_for_hr": False,
+                    "readiness_level": "Evaluating",
+                    "development_areas": [],
+                    "strengths": [],
+                    "answers": []
+                }
+                results_list.append(rdata)
                 continue
 
+            # Completed assignment processing
             rdata = a.result.to_dict()
             rdata["assignment"] = a.to_dict()
+            rdata["assignment_id"] = a.id
             rdata["employee_id"] = a.employee_id
             rdata["employee_name"] = a.employee.name if a.employee else ""
             rdata["employee_code"] = a.employee.employee_code if a.employee else ""
             rdata["email"] = a.employee.email if a.employee else ""
             rdata["department"] = a.employee.department if a.employee else ""
             rdata["designation"] = a.employee.designation if a.employee else ""
+            rdata["manager_id"] = a.employee.manager_id if a.employee else None
+            rdata["manager_name"] = a.employee.manager.name if (a.employee and a.employee.manager) else "Unassigned"
             rdata["assessment_id"] = a.assessment_id
             rdata["assessment_title"] = a.assessment.title if a.assessment else ""
+            rdata["assessment_stage"] = stage_name
+            rdata["stage"] = stage_name
             rdata["role_id"] = a.assessment.role_id if a.assessment else 1
             rdata["role_name"] = a.assessment.role.role_name if a.assessment and a.assessment.role else ""
             rdata["submission_date"] = a.result.completed_at.isoformat() if a.result.completed_at else None
-            rdata["status"] = a.status
+            rdata["completion_date"] = a.result.completed_at.strftime('%Y-%m-%d') if a.result.completed_at else None
+            rdata["status"] = real_st
 
             detail = rdata.get("detail", {})
             total_score = detail.get("_total_score")
@@ -849,10 +961,23 @@ def get_assessment_results():
             total_poss_num = float(total_possible) if float(total_possible) > 0 else 100.0
             norm_pct = round((total_sc_num / total_poss_num * 100.0), 2)
 
+            is_pass = a.result.passed if a.result.passed is not None else (norm_pct >= pass_score)
+            if status_filter == 'Passed' and not is_pass:
+                continue
+            if status_filter == 'Failed' and is_pass:
+                continue
+
             rdata["total_score"] = round(total_sc_num, 2)
             rdata["total_possible"] = round(total_poss_num, 2)
             rdata["normalized_percentage"] = norm_pct
             rdata["overall_score"] = norm_pct
+            rdata["score"] = norm_pct
+            rdata["passing_score"] = pass_score
+            rdata["passing_threshold"] = pass_score
+            rdata["result"] = "Pass" if is_pass else "Fail"
+            rdata["passed"] = bool(is_pass)
+            rdata["hr_eligibility"] = "Eligible" if is_pass else "Ineligible"
+            rdata["eligible_for_hr"] = bool(is_pass)
 
             target_role_id = a.assessment.role_id if a.assessment else 1
             gaps = calculate_competency_gaps(a.employee_id, target_role_id)
@@ -911,13 +1036,19 @@ def get_assessment_results():
             results_list.append(rdata)
 
         # Standard competition rank calculation with honest tie-handling
-        # Sort numerically by normalized_percentage descending
-        results_list.sort(key=lambda x: x["normalized_percentage"], reverse=True)
+        # Sort numerically by normalized_percentage descending (completed first)
+        results_list.sort(key=lambda x: (x["normalized_percentage"] is not None, x["normalized_percentage"] or 0.0), reverse=True)
 
         current_rank = 1
         for idx, res in enumerate(results_list):
-            if idx > 0 and res["normalized_percentage"] < results_list[idx - 1]["normalized_percentage"]:
-                current_rank = idx + 1
+            if res["normalized_percentage"] is None:
+                res["assessment_rank"] = "-"
+                res["is_highest_scorer"] = False
+            else:
+                if idx > 0 and results_list[idx - 1]["normalized_percentage"] is not None and res["normalized_percentage"] < results_list[idx - 1]["normalized_percentage"]:
+                    current_rank = idx + 1
+                res["assessment_rank"] = current_rank
+                res["is_highest_scorer"] = (current_rank == 1 and res["normalized_percentage"] > 0)
             res["assessment_rank"] = current_rank
             res["is_highest_scorer"] = (current_rank == 1 and res["normalized_percentage"] > 0)
 
@@ -997,8 +1128,8 @@ def get_assessment_result(assignment_id):
     # Enforce data isolation: Employee can view ONLY their own results! Manager can view direct reports' results.
     if user.role.lower() not in ['hr', 'admin']:
         if user.role.lower() == 'manager':
-            if not employee or (assignment.employee.manager_id != employee.id and assignment.employee_id != employee.id):
-                return jsonify({"success": False, "message": "Access forbidden: Managers can only view team member results"}), 403
+            if not employee or (assignment.employee.manager_id != employee.id and assignment.employee_id != employee.id and assignment.assigned_by != user.id):
+                return jsonify({"success": False, "message": "Access forbidden: Managers can only view team member results or assessments they assigned"}), 403
         else: # Employee
             if not employee or assignment.employee_id != employee.id:
                 return jsonify({"success": False, "message": "Access forbidden: You cannot view another employee's result"}), 403

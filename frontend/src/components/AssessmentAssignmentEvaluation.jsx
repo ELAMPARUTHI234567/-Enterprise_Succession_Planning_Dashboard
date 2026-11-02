@@ -196,6 +196,14 @@ export const AssessmentAssignmentEvaluation = ({ onRefresh }) => {
       return;
     }
 
+    // Enforce Stage 1 Initial Screening pass check before assigning Stage 2
+    const notScreened = selectedEmpIds.filter(id => !eligibleScreenedEmpIds.has(id));
+    if (notScreened.length > 0) {
+      const names = allEmployees.filter(e => notScreened.includes(e.id)).map(e => e.name).join(', ');
+      setActionError(`Cannot assign Stage 2 Leadership Assessment: Employee(s) [${names}] have not completed and passed Stage 1 Initial Screening (≥70%).`);
+      return;
+    }
+
     setAssigning(true);
     setActionError('');
     setActionSuccess('');
@@ -345,7 +353,7 @@ export const AssessmentAssignmentEvaluation = ({ onRefresh }) => {
           }`}
         >
           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-          <span>Eligible Employees – Initial Assessment Passed</span>
+          <span>Stage 1 Passed – Eligible for Leadership Assessment</span>
           <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
             activeHubView === 'eligible-screened' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'
           }`}>
@@ -359,7 +367,7 @@ export const AssessmentAssignmentEvaluation = ({ onRefresh }) => {
           <div className="p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h3 className="text-base font-bold text-slate-900 flex items-center space-x-2">
-                <span>Eligible Employees – Initial Assessment Passed</span>
+                <span>Stage 1 Passed – Eligible for Leadership Assessment</span>
                 <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-extrabold rounded-full">
                   Stage 1 Verified ({eligibleScreened.length})
                 </span>
