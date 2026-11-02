@@ -73,6 +73,7 @@ export const Login = () => {
 
   const navigate = useNavigate();
   const hasExchangedRef = useRef(false);
+  const isInitiatingGoogleRef = useRef(false);
 
   useEffect(() => {
     // 1. Inspect URL for OAuth return parameters & errors
@@ -90,7 +91,13 @@ export const Login = () => {
 
     if (oauthError) {
       window.history.replaceState({}, document.title, window.location.pathname);
-      setError(`Google Sign-In was cancelled or failed: ${decodeURIComponent(oauthError.replace(/\+/g, ' '))}`);
+      const decodedError = decodeURIComponent(oauthError.replace(/\+/g, ' '));
+      if (/state not found|expired|flow_state|bad_oauth_state/i.test(decodedError)) {
+        setError('Your previous Google sign-in session expired or was already completed. Please click "Continue with Google" below to sign in.');
+      } else {
+        setError(`Google Sign-In was cancelled or failed: ${decodedError}`);
+      }
+      setGoogleLoading(false);
       return;
     }
 
@@ -205,10 +212,9 @@ export const Login = () => {
       }
     };
 
-    // 4. Handle incoming tokens: URL hash tokens (implicit flow) or query code (PKCE flow)
+    // 4. Handle incoming OAuth callback (PKCE code or implicit hash)
     if (hashAccessToken) {
       setGoogleLoading(true);
-      // Immediately scrub the sensitive tokens from the browser address bar
       window.history.replaceState({}, document.title, window.location.pathname);
       supabase.auth.setSession({
         access_token: hashAccessToken,
@@ -226,20 +232,36 @@ export const Login = () => {
       });
     } else if (authCode) {
       setGoogleLoading(true);
-      window.history.replaceState({}, document.title, window.location.pathname);
-      supabase.auth.exchangeCodeForSession(authCode).then(({ data, error: codeErr }) => {
-        if (codeErr) {
-          setError(codeErr.message || 'Failed to exchange authorization code.');
-          setGoogleLoading(false);
-        } else if (data?.session) {
+      // Coordinate with Supabase client's auto-detection (detectSessionInUrl: true)
+      supabase.auth.getSession().then(({ data, error: getErr }) => {
+        if (data?.session) {
           processOAuthSession(data.session);
+        } else if (!hasExchangedRef.current) {
+          // Single-flight exchange fallback if not auto-exchanged
+          supabase.auth.exchangeCodeForSession(authCode).then(({ data: exData, error: codeErr }) => {
+            if (codeErr) {
+              // Double check if background listener already acquired session
+              supabase.auth.getSession().then(({ data: retryData }) => {
+                if (retryData?.session && !hasExchangedRef.current) {
+                  processOAuthSession(retryData.session);
+                } else {
+                  setError(codeErr.message || 'Failed to exchange authorization code.');
+                  setGoogleLoading(false);
+                }
+              });
+            } else if (exData?.session) {
+              processOAuthSession(exData.session);
+            }
+          }).catch((e) => {
+            setError(e.message || 'Error exchanging authorization code.');
+            setGoogleLoading(false);
+          });
         }
-      }).catch((e) => {
-        setError(e.message || 'Error exchanging authorization code.');
+      }).catch(() => {
         setGoogleLoading(false);
       });
     } else {
-      // 5. Check if session already stored or detected internally
+      // 5. Normal page load: check if already signed in via Supabase
       supabase.auth.getSession().then(({ data: { session } }) => {
         if (session && !hasExchangedRef.current) {
           processOAuthSession(session);
@@ -261,8 +283,12 @@ export const Login = () => {
 
   const handleGoogleSignIn = async () => {
     setError('');
+    if (isInitiatingGoogleRef.current || googleLoading || loading) return;
+    isInitiatingGoogleRef.current = true;
+
     if (!supabase) {
       setError('Google Sign-In is unavailable because Supabase Auth is not configured.');
+      isInitiatingGoogleRef.current = false;
       return;
     }
 
@@ -290,6 +316,7 @@ export const Login = () => {
     } catch (err) {
       setError(err?.message || 'Failed to initiate Google Sign-In. Please try again.');
       setGoogleLoading(false);
+      isInitiatingGoogleRef.current = false;
     }
   };
 
@@ -490,6 +517,7 @@ export const Login = () => {
     setOnboardToken('');
     setOnboardError('');
     hasExchangedRef.current = false;
+    isInitiatingGoogleRef.current = false;
     await supabase?.auth?.signOut();
   };
 

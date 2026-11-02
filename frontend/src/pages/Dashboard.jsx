@@ -12,6 +12,7 @@ import AIExecutiveSummarySection from '../components/AIExecutiveSummarySection';
 import AITop3SuccessorsSection from '../components/AITop3SuccessorsSection';
 import AICompetencyIntelligenceSection from '../components/AICompetencyIntelligenceSection';
 import AIChatDrawer from '../components/AIChatDrawer';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 export const Dashboard = () => {
   // Stale-While-Revalidate: Populate immediately from session cache if available
@@ -207,10 +208,12 @@ export const Dashboard = () => {
       )}
 
       {/* Module 1: AI Executive Workforce & Succession Summary */}
-      <AIExecutiveSummarySection 
-        onNavigateAssessments={() => navigate('/assessments')} 
-        onNavigateSuccessors={() => navigate('/successors')} 
-      />
+      <ErrorBoundary isSubSection sectionTitle="AI Executive Workforce Summary">
+        <AIExecutiveSummarySection 
+          onNavigateAssessments={() => navigate('/assessments')} 
+          onNavigateSuccessors={() => navigate('/successors')} 
+        />
+      </ErrorBoundary>
 
       {/* Row 1: KPI Cards - Skeletons or real cards */}
       {loading && !summary ? (
@@ -408,13 +411,19 @@ export const Dashboard = () => {
         </div>
       )}
       {/* Module 2: AI Top 3 Eligible Successor Recommendations */}
-      <AITop3SuccessorsSection onNavigateProfile={(empId) => navigate(`/employees/${empId}`)} />
+      <ErrorBoundary isSubSection sectionTitle="AI Top 3 Eligible Successors">
+        <AITop3SuccessorsSection onNavigateProfile={(empId) => navigate(`/employees/${empId}`)} />
+      </ErrorBoundary>
 
       {/* Module 3: AI Competency Gap Intelligence (8 Core Dimensions) */}
-      <AICompetencyIntelligenceSection />
+      <ErrorBoundary isSubSection sectionTitle="AI Competency Intelligence">
+        <AICompetencyIntelligenceSection />
+      </ErrorBoundary>
 
       {/* Module 5: Floating AI HR Chat Assistant */}
-      <AIChatDrawer isManager={false} />
+      <ErrorBoundary isSubSection sectionTitle="AI Chat Assistant">
+        <AIChatDrawer isManager={false} />
+      </ErrorBoundary>
     </div>
   );
 };

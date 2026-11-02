@@ -16,6 +16,7 @@ import Successors from './pages/Successors';
 import AIInsights from './pages/AIInsights';
 import Analytics from './pages/Analytics';
 import Reports from './pages/Reports';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Role Guard Component
 const ProtectedRoute = ({ children, allowedRoles }) => {
@@ -59,7 +60,13 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     }
   }
 
-  return <MainLayout>{children}</MainLayout>;
+  return (
+    <MainLayout>
+      <ErrorBoundary>
+        {children}
+      </ErrorBoundary>
+    </MainLayout>
+  );
 };
 
 export const App = () => {

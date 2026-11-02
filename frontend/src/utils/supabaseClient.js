@@ -23,6 +23,7 @@ const supabaseAnonKey = typeof rawAnonKey === 'string' ? rawAnonKey.trim() : '';
 export const supabase = (supabaseUrl && supabaseAnonKey) 
     ? createClient(supabaseUrl, supabaseAnonKey, {
         auth: {
+            flowType: 'pkce',
             persistSession: true,
             autoRefreshToken: true,
             detectSessionInUrl: true
