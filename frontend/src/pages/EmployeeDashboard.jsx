@@ -12,18 +12,21 @@ import SkillsCompetenciesSection from '../components/SkillsCompetenciesSection';
 import { authService, assessmentService, employeeService, gapService } from '../services/api';
 
 export const EmployeeDashboard = () => {
-  const [loading, setLoading] = useState(true);
-  const [employeeProfile, setEmployeeProfile] = useState(null);
-  const [myAssessments, setMyAssessments] = useState([]);
-  const [gapData, setGapData] = useState(null);
-  const [readinessData, setReadinessData] = useState(null);
-  const [error, setError] = useState('');
-  
   const navigate = useNavigate();
   const location = useLocation();
 
   const userJson = localStorage.getItem('succession_user');
   const user = userJson ? JSON.parse(userJson) : null;
+  const initialEmpProfile = user?.employee_profile || (user?.role?.toLowerCase() === 'employee' ? user : null);
+
+  const [loading, setLoading] = useState(!initialEmpProfile);
+  const [isWakingUp, setIsWakingUp] = useState(false);
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  const [employeeProfile, setEmployeeProfile] = useState(initialEmpProfile);
+  const [myAssessments, setMyAssessments] = useState([]);
+  const [gapData, setGapData] = useState(null);
+  const [readinessData, setReadinessData] = useState(null);
+  const [error, setError] = useState('');
 
   // Determine active view tab based on route
   const getActiveTab = () => {
@@ -45,17 +48,15 @@ export const EmployeeDashboard = () => {
 
   const activeTab = getActiveTab();
 
-  const fetchEmployeeData = async () => {
+  const fetchEmployeeData = async (attempt = 0) => {
     setLoading(true);
     setError('');
+    setRetryAttempt(attempt);
 
-    // Safety timeout guard to prevent indefinite hanging
-    const timeoutId = setTimeout(() => {
-      setLoading(false);
-      if (!employeeProfile) {
-        setError('Employee portal loading timed out. Please click retry.');
-      }
-    }, 15000);
+    // Warm-up timer to inform the user if backend is spinning up from cold standby (Render)
+    const wakeupTimer = setTimeout(() => {
+      setIsWakingUp(true);
+    }, 3500);
 
     try {
       // 1. Get authenticated user profile & linked employee info
@@ -64,6 +65,12 @@ export const EmployeeDashboard = () => {
       if (meRes?.success && meRes?.data) {
         empData = meRes.data.employee_profile || meRes.data;
         setEmployeeProfile(empData);
+        if (user) {
+          const updated = { ...user, employee_profile: empData };
+          localStorage.setItem('succession_user', JSON.stringify(updated));
+        }
+      } else if (initialEmpProfile) {
+        empData = initialEmpProfile;
       }
 
       const targetRoleId = empData?.target_role_id || 1;
@@ -88,39 +95,64 @@ export const EmployeeDashboard = () => {
       if (readRes?.success) {
         setReadinessData(readRes.data);
       }
+      setError('');
     } catch (err) {
-      setError(err.message || 'Error loading employee dashboard data');
+      console.warn(`[EmployeePortal] Attempt ${attempt + 1} fetch notice:`, err);
+      // Auto-retry once or twice for transient cold start delays
+      const errMsg = err.message || '';
+      const isColdStart = errMsg.includes('timed out') || errMsg.includes('standby') || errMsg.includes('waking up') || errMsg.includes('communicate') || errMsg.includes('Network');
+      if (attempt < 2 && isColdStart) {
+        setIsWakingUp(true);
+        setTimeout(() => {
+          fetchEmployeeData(attempt + 1);
+        }, 3000);
+        return;
+      }
+      setError(errMsg || 'Error loading employee dashboard data. Please verify your connection.');
     } finally {
-      clearTimeout(timeoutId);
+      clearTimeout(wakeupTimer);
+      setIsWakingUp(false);
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchEmployeeData();
+    fetchEmployeeData(0);
   }, []);
 
   if (loading && !employeeProfile) {
     return (
-      <div className="flex flex-col items-center justify-center h-96">
-        <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mb-3" />
-        <p className="text-xs font-semibold text-slate-500">Loading Personal Portal...</p>
+      <div className="flex flex-col items-center justify-center min-h-[380px] max-w-md mx-auto text-center px-4">
+        <RefreshCw className="w-9 h-9 text-indigo-600 animate-spin mb-4" />
+        <h3 className="text-sm font-bold text-slate-800 mb-1">
+          {isWakingUp ? 'Waking Up Secure Services...' : 'Loading Employee Portal...'}
+        </h3>
+        <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+          {isWakingUp
+            ? 'The backend server is waking up from standby (Render free tier). This typically takes 15–30 seconds. Your profile and assessments will load momentarily.'
+            : 'Connecting to database and verifying your credentials and assessments...'}
+        </p>
+        {isWakingUp && (
+          <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+            <div className="bg-indigo-600 h-1.5 rounded-full animate-pulse w-3/4"></div>
+          </div>
+        )}
       </div>
     );
   }
 
   if (error && !employeeProfile) {
     return (
-      <div className="flex flex-col items-center justify-center p-8 bg-white rounded-2xl border border-rose-200 card-shadow text-center">
+      <div className="flex flex-col items-center justify-center p-8 bg-white rounded-2xl border border-rose-200 card-shadow text-center max-w-lg mx-auto my-12">
         <ShieldAlert className="w-12 h-12 text-rose-500 mb-3" />
         <h3 className="text-base font-bold text-slate-800">Unable to Load Employee Portal</h3>
-        <p className="text-xs text-slate-500 mt-1 mb-4 max-w-md">{error}</p>
+        <p className="text-xs text-slate-500 mt-1 mb-5 max-w-md leading-relaxed">{error}</p>
         <button
-          onClick={fetchEmployeeData}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all flex items-center space-x-2"
+          onClick={() => fetchEmployeeData(0)}
+          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all flex items-center space-x-2 shadow-md shadow-indigo-600/20 cursor-pointer"
         >
           <RefreshCw className="w-3.5 h-3.5" />
-          <span>Retry Loading</span>
+          <span>Retry Loading Portal</span>
         </button>
       </div>
     );
@@ -190,6 +222,13 @@ export const EmployeeDashboard = () => {
 
         <div className="absolute right-0 bottom-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
       </div>
+
+      {isWakingUp && (
+        <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold rounded-2xl flex items-center space-x-2 animate-pulse">
+          <RefreshCw className="w-4 h-4 text-amber-600 animate-spin flex-shrink-0" />
+          <span>Backend services are waking up from standby (Render free tier). Syncing latest assessment results and records...</span>
+        </div>
+      )}
 
       {error && (
         <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium rounded-2xl">

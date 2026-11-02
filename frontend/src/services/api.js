@@ -76,14 +76,26 @@ api.interceptors.request.use(
 
 api.interceptors.response.use(
   (response) => response.data,
-  (error) => {
+  async (error) => {
     if (axios.isCancel(error) || error.code === 'ERR_CANCELED') {
       return Promise.reject(error);
     }
+    const config = error.config;
     const status = error.response ? error.response.status : (error.request ? 'NO_RESPONSE' : 'REQUEST_SETUP_ERROR');
     const responseData = error.response?.data?.message || error.response?.data?.error || null;
     const errCode = error.code || 'UNKNOWN_CODE';
     const errMessage = error.message || 'Unknown network error';
+
+    // Auto-retry idempotent GET requests once on cold start delay/timeout
+    if (config && (!config.method || config.method.toLowerCase() === 'get') && !config._retryAttempted) {
+      const isColdStartTimeout = errCode === 'ECONNABORTED' || errCode === 'ERR_NETWORK' || !error.response;
+      if (isColdStartTimeout) {
+        config._retryAttempted = true;
+        console.warn(`[API Service] Standby cold start detected. Automatically retrying GET ${config.url} in 2.5s...`);
+        await new Promise((res) => setTimeout(res, 2500));
+        return api(config);
+      }
+    }
 
     // Log diagnostic without exposing sensitive authorization or token headers
     console.error(`[API Error Diagnostic] Status: ${status} | Code: ${errCode} | Target: ${API_BASE_URL}${error.config?.url || ''}`);
@@ -105,13 +117,13 @@ api.interceptors.response.use(
     // Explicit timeout handling (especially helpful for Render free-tier cold starts)
     if (errCode === 'ECONNABORTED' || (errMessage && errMessage.toLowerCase().includes('timeout'))) {
       return Promise.reject(new Error(
-        `API server request timed out after 45 seconds while communicating with ${API_BASE_URL}. The backend service may be waking up from a sleeping state (Render free tier). Please wait 30 seconds and refresh.`
+        `API server request timed out after 45 seconds while communicating with ${API_BASE_URL}. The backend service may be waking up from a sleeping state (Render free tier). Please wait a few moments and try again.`
       ));
     }
 
     if (error.code === 'ERR_NETWORK' || !error.response) {
       return Promise.reject(new Error(
-        `Unable to communicate with API server at ${API_BASE_URL}. Please check your internet connection or verify that the backend service is healthy.`
+        `Unable to communicate with API server at ${API_BASE_URL}. The backend service may be initializing or waking up from sleep. Please try again in a few seconds.`
       ));
     }
 

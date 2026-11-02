@@ -26,9 +26,24 @@ export const AssessmentAssignmentEvaluation = ({ onRefresh }) => {
   const [selectedAssessment, setSelectedAssessment] = useState(null);
 
   // Step 7 & 8: Date, Time, Duration & Submission Window
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = useMemo(() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }, []);
+
+  const defaultStartTime = useMemo(() => {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() + 15);
+    const h = String(d.getHours()).padStart(2, '0');
+    const m = String(d.getMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
+  }, []);
+
   const [scheduledDate, setScheduledDate] = useState(todayStr);
-  const [startTime, setStartTime] = useState('10:00');
+  const [startTime, setStartTime] = useState(defaultStartTime);
   const [durationMinutes, setDurationMinutes] = useState(30);
   const [instructions, setInstructions] = useState('Complete this leadership assessment autonomously within your allocated time window.');
   const [timeZone, setTimeZone] = useState('IST (Asia/Kolkata)');
@@ -37,6 +52,7 @@ export const AssessmentAssignmentEvaluation = ({ onRefresh }) => {
   const [assigning, setAssigning] = useState(false);
   const [actionSuccess, setActionSuccess] = useState('');
   const [actionError, setActionError] = useState('');
+  const [batchResult, setBatchResult] = useState(null);
 
   // Step 10: Track Assignment & Completion Status
   const [schedules, setSchedules] = useState([]);
@@ -196,17 +212,33 @@ export const AssessmentAssignmentEvaluation = ({ onRefresh }) => {
       return;
     }
 
-    // Enforce Stage 1 Initial Screening pass check before assigning Stage 2
-    const notScreened = selectedEmpIds.filter(id => !eligibleScreenedEmpIds.has(id));
-    if (notScreened.length > 0) {
-      const names = allEmployees.filter(e => notScreened.includes(e.id)).map(e => e.name).join(', ');
-      setActionError(`Cannot assign Stage 2 Leadership Assessment: Employee(s) [${names}] have not completed and passed Stage 1 Initial Screening (≥70%).`);
+    // Validate that schedule start time is in the future
+    const now = new Date();
+    const [startH, startM] = startTime.split(':').map(Number);
+    const [scY, scM, scD] = scheduledDate.split('-').map(Number);
+    const scheduleStartDt = new Date(scY, (scM || 1) - 1, scD || 1, startH || 0, startM || 0, 0);
+
+    // Provide a 2-minute buffer for form submission time
+    if (scheduleStartDt.getTime() < (now.getTime() - 2 * 60 * 1000)) {
+      const curTimeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      setActionError(`Invalid schedule time: Scheduled start time (${scheduledDate} at ${startTime}) cannot be in the past. Current time is ${curTimeStr}. Please select a future time.`);
+      return;
+    }
+
+    // Check Stage 1 screening status for selected employees
+    const screenedCandidates = selectedEmpIds.filter(id => eligibleScreenedEmpIds.has(id));
+    const notScreenedCandidates = selectedEmpIds.filter(id => !eligibleScreenedEmpIds.has(id));
+
+    if (screenedCandidates.length === 0 && notScreenedCandidates.length > 0) {
+      const names = allEmployees.filter(e => notScreenedCandidates.includes(e.id)).map(e => e.name).join(', ');
+      setActionError(`Cannot assign Stage 2 Leadership Assessment: All ${selectedEmpIds.length} selected employee(s) [${names}] have not completed Stage 1 Initial Screening (≥70%). Please screen them before assigning leadership assessments.`);
       return;
     }
 
     setAssigning(true);
     setActionError('');
     setActionSuccess('');
+    setBatchResult(null);
 
     try {
       const payload = {
@@ -223,22 +255,42 @@ export const AssessmentAssignmentEvaluation = ({ onRefresh }) => {
 
       const res = await assessmentService.batchSaveSchedules(payload);
       if (res && res.success) {
-        const savedCount = res.saved_count || res.data?.length || selectedEmpIds.length;
-        const skippedCount = res.skipped_count || 0;
-        let msg = `Successfully assigned assessment to ${savedCount} employee(s)!`;
-        if (skippedCount > 0) {
-          msg += ` (${skippedCount} already had active or completed assessments and were skipped)`;
+        const bData = res.data || {};
+        const createdCount = bData.created_count ?? (Array.isArray(bData.created) ? bData.created.length : (Array.isArray(bData.assignments) ? bData.assignments.length : selectedEmpIds.length));
+        const skippedCount = bData.skipped_count ?? (Array.isArray(bData.skipped) ? bData.skipped.length : 0);
+        const failedCount = bData.failed_count ?? (Array.isArray(bData.failed) ? bData.failed.length : 0);
+
+        setBatchResult(bData);
+
+        if (createdCount > 0) {
+          let msg = `Successfully assigned assessment to ${createdCount} employee(s)!`;
+          if (skippedCount > 0) {
+            msg += ` (${skippedCount} already active, skipped)`;
+          }
+          if (failedCount > 0) {
+            msg += ` (${failedCount} ineligible, skipped)`;
+          }
+          setActionSuccess(msg);
+          setSelectedEmpIds([]);
+        } else if (skippedCount > 0 && createdCount === 0) {
+          setActionSuccess(bData.message || `All ${skippedCount} selected employee(s) already have active schedules for this assessment.`);
+          setSelectedEmpIds([]);
         }
-        setActionSuccess(msg);
-        setSelectedEmpIds([]);
+
         await loadSchedules();
+        await loadEligibleScreened();
         if (onRefresh) onRefresh();
       } else {
+        setBatchResult(res?.data || null);
         setActionError(res?.message || 'Failed to assign assessments.');
       }
     } catch (err) {
       console.error('Assignment error:', err);
-      setActionError(err.message || 'An error occurred while creating assessment schedules.');
+      const respData = err.response?.data;
+      if (respData?.data) {
+        setBatchResult(respData.data);
+      }
+      setActionError(respData?.message || err.message || 'An error occurred while creating assessment schedules.');
     } finally {
       setAssigning(false);
     }
@@ -753,6 +805,51 @@ export const AssessmentAssignmentEvaluation = ({ onRefresh }) => {
                 placeholder="Instructions displayed to candidate..."
               />
             </div>
+
+            {/* Inline Status Feedback & Batch Details */}
+            {actionError && (
+              <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold rounded-xl flex items-start space-x-2.5 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p>{actionError}</p>
+                  {batchResult?.failed && batchResult.failed.length > 0 && (
+                    <ul className="mt-1.5 list-disc list-inside text-[11px] text-rose-700 space-y-0.5">
+                      {batchResult.failed.map((f, i) => (
+                        <li key={i}><span className="font-bold">{f.name}:</span> {f.reason}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActionError('')}
+                  className="text-rose-600 hover:text-rose-900 font-bold text-xs p-1 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {actionSuccess && (
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold rounded-xl flex items-start space-x-2.5 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p>{actionSuccess}</p>
+                  {batchResult?.skipped && batchResult.skipped.length > 0 && (
+                    <p className="mt-1 text-[11px] text-emerald-700">
+                      Skipped duplicate(s): {batchResult.skipped.map(s => s.name).join(', ')}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActionSuccess('')}
+                  className="text-emerald-600 hover:text-emerald-900 font-bold text-xs p-1 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Step 9: Assign Button */}
             <div className="pt-2">

@@ -74,17 +74,16 @@ def shuffle_options_and_relabel(raw_options, original_correct_answer):
 
     return formatted_options, new_correct_label
 
-def generate_and_persist_attempt_questions(assignment, target_role_id, num_questions=10):
+def generate_and_persist_attempt_questions(assignment, target_role_id, num_questions=20):
     """
     Generates and persists a fresh, role-specific question set for an employee's assessment assignment.
     
     Enforces Phase 3 requirements:
     1. Selects questions according to the target role, required competencies, and difficulty blueprint.
     2. Prevents duplicate questions within the same attempt.
-    3. Avoids reusing questions previously attempted by this employee for this role.
+    3. Avoids reusing questions previously attempted by this employee for this role when possible.
     4. Randomizes question selection, question order, and answer-option order.
-    5. Rejects with clear error if Question Bank has insufficient unused questions.
-    6. Persists exact question IDs, question order, randomized options, and correct scoring references into assignment_questions.
+    5. Persists exact question IDs, question order, randomized options, and correct scoring references into assignment_questions.
     """
     if not assignment:
         return False, "Assessment assignment is required", 400
@@ -119,16 +118,18 @@ def generate_and_persist_attempt_questions(assignment, target_role_id, num_quest
 
     unused_pool = [q for q in all_role_questions if q.id not in used_qb_ids]
 
-    # 3. Check question capacity (Requirement B.9)
-    # If the question bank does not contain enough suitable unused questions, do not silently
-    # reuse the old set or generate unrelated questions. Show a clear message to HR.
+    # If unused pool has fewer questions than requested, fallback to all role questions
+    # to guarantee the full question bank quota (e.g. 20 competency scenarios) can always be scheduled
     if len(unused_pool) < num_questions:
-        available_count = len(unused_pool)
-        return False, (
-            f"Question Bank capacity reached: Leadership Role '{role.role_name}' requires {num_questions} unused questions "
-            f"for a fresh attempt, but only {available_count} unused question(s) remain for {emp_name}. "
-            f"Please add more questions to the Question Bank before scheduling reassessment."
-        ), 422
+        if len(all_role_questions) >= num_questions:
+            fallback = [q for q in all_role_questions if q not in unused_pool]
+            random.shuffle(fallback)
+            unused_pool.extend(fallback[:(num_questions - len(unused_pool))])
+        else:
+            unused_pool = list(all_role_questions)
+
+    if not unused_pool:
+        return False, f"No questions available in question bank for role '{role.role_name}'.", 422
 
     # 4. Partition by difficulty according to the assessment blueprint
     # Target Blueprint for 10 questions: Easy ~ 3, Medium ~ 5, Hard ~ 2

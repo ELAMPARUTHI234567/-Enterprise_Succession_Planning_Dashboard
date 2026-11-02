@@ -1,4 +1,7 @@
 import unittest
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import jwt
 from datetime import datetime, timedelta
 from app import app
@@ -28,12 +31,16 @@ class TestBatchSchedulingEndpoint(unittest.TestCase):
         """Case 1: One selected employee with a valid manual schedule saves cleanly via HTTP POST"""
         with self.app.app_context():
             hr_user = User.query.filter_by(role='HR').first()
-            emp = Employee.query.first()
+            screened = [
+                e for e in Employee.query.all()
+                if any(a.result and a.result.overall_score >= 70 for a in e.assessment_assignments)
+            ]
+            emp = screened[0]
             assess = Assessment.query.first()
             token = self.generate_token(hr_user)
 
             # Cleanup any existing test schedule
-            AssessmentAssignment.query.filter_by(scheduled_date="2026-11-25", employee_id=emp.id).delete()
+            AssessmentAssignment.query.filter_by(employee_id=emp.id, assessment_id=assess.id).delete()
             db.session.commit()
 
             payload = {
@@ -41,6 +48,7 @@ class TestBatchSchedulingEndpoint(unittest.TestCase):
                 "role_id": assess.role_id,
                 "title": assess.title,
                 "time_zone": "IST (Asia/Kolkata)",
+                
                 "schedules": [
                     {
                         "employee_id": emp.id,
@@ -81,14 +89,18 @@ class TestBatchSchedulingEndpoint(unittest.TestCase):
         """Case 2: Two selected employees with different manually entered schedules"""
         with self.app.app_context():
             hr_user = User.query.filter_by(role='HR').first()
-            employees = Employee.query.limit(2).all()
-            self.assertGreaterEqual(len(employees), 2)
+            screened = [
+                e for e in Employee.query.all()
+                if any(a.result and a.result.overall_score >= 70 for a in e.assessment_assignments)
+            ]
+            self.assertGreaterEqual(len(screened), 2)
             assess = Assessment.query.first()
             token = self.generate_token(hr_user)
 
-            emp1, emp2 = employees[0], employees[1]
+            emp1, emp2 = screened[0], screened[1]
             AssessmentAssignment.query.filter(
-                AssessmentAssignment.scheduled_date.in_(["2026-11-26", "2026-11-27"])
+                AssessmentAssignment.employee_id.in_([emp1.id, emp2.id]),
+                AssessmentAssignment.assessment_id == assess.id
             ).delete()
             db.session.commit()
 
@@ -138,18 +150,24 @@ class TestBatchSchedulingEndpoint(unittest.TestCase):
             db.session.commit()
 
     def test_03_ten_selected_employees_manual_schedules(self):
-        """Case 3: Ten selected employees with manually entered schedules without auto-generation"""
+        """Case 3: Multiple selected employees with manually entered schedules without auto-generation"""
         with self.app.app_context():
             hr_user = User.query.filter_by(role='HR').first()
-            employees = Employee.query.limit(10).all()
+            screened = [
+                e for e in Employee.query.all()
+                if any(a.result and a.result.overall_score >= 70 for a in e.assessment_assignments)
+            ][:5]
             assess = Assessment.query.first()
             token = self.generate_token(hr_user)
 
-            AssessmentAssignment.query.filter_by(scheduled_date="2026-11-28").delete()
+            AssessmentAssignment.query.filter(
+                AssessmentAssignment.employee_id.in_([e.id for e in screened]),
+                AssessmentAssignment.assessment_id == assess.id
+            ).delete()
             db.session.commit()
 
             schedules = []
-            for idx, emp in enumerate(employees):
+            for idx, emp in enumerate(screened):
                 schedules.append({
                     "employee_id": emp.id,
                     "employee_name": emp.name,
@@ -171,7 +189,7 @@ class TestBatchSchedulingEndpoint(unittest.TestCase):
 
             self.assertEqual(res.status_code, 201)
             data = res.get_json()
-            self.assertEqual(data["data"]["created_count"], len(employees))
+            self.assertEqual(data["data"]["created_count"], len(screened))
 
             # Cleanup
             AssessmentAssignment.query.filter_by(scheduled_date="2026-11-28").delete()
@@ -236,11 +254,18 @@ class TestBatchSchedulingEndpoint(unittest.TestCase):
         """Case 6: Successfully saved assignments appear in GET /api/assessment-schedules"""
         with self.app.app_context():
             hr_user = User.query.filter_by(role='HR').first()
-            emp = Employee.query.first()
+            screened = [
+                e for e in Employee.query.all()
+                if any(a.result and a.result.overall_score >= 70 for a in e.assessment_assignments)
+            ]
+            emp = screened[0]
             assess = Assessment.query.first()
             token = self.generate_token(hr_user)
 
-            AssessmentAssignment.query.filter_by(scheduled_date="2026-11-30", employee_id=emp.id).delete()
+            AssessmentAssignment.query.filter(
+                AssessmentAssignment.employee_id == emp.id,
+                AssessmentAssignment.assessment_id == assess.id
+            ).delete()
             db.session.commit()
 
             # Save assignment

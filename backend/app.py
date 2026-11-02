@@ -1,6 +1,7 @@
 import os
 import sys
-from flask import Flask, jsonify, request
+import time
+from flask import Flask, jsonify, request, g
 from config import Config
 from extensions import db, cors
 from utils.seed_data import seed_database_if_empty, sync_employee_users
@@ -68,6 +69,10 @@ def create_app():
         "supports_credentials": True
     }})
 
+    @app.before_request
+    def record_start_time():
+        g.start_time = time.time()
+
     @app.after_request
     def add_cors_headers(response):
         origin = request.headers.get('Origin')
@@ -76,6 +81,12 @@ def create_app():
             response.headers['Access-Control-Allow-Credentials'] = 'true'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin, apikey'
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+
+        if hasattr(g, 'start_time'):
+            elapsed = time.time() - g.start_time
+            response.headers['X-Response-Time'] = f"{elapsed:.3f}s"
+            if elapsed > 1.5 or response.status_code >= 400:
+                print(f"[HTTP] {request.method} {request.path} -> {response.status_code} in {elapsed:.3f}s")
         return response
 
     # Validate DATABASE_URL configuration

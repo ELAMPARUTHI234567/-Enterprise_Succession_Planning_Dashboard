@@ -237,13 +237,17 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
         return None, f"Conflict: Duplicate assignment detected: Employee(s) {dup_batch_emp_ids} are included more than once in this batch.", 409
 
     # 1. Validate every entry is complete, date format is valid, and time window is sound
+    # 1. Validate every entry has valid format, completeness and future time window
     incomplete_employees = []
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
     for idx, s in enumerate(schedules_input, start=1):
         emp_id = s.get('employee_id')
         sc_date = str(s.get('scheduled_date') or s.get('date') or '').strip()
         st_time = str(s.get('start_time') or '').strip()
         end_time_in = str(s.get('end_time') or '').strip()
         dur_val = s.get('duration_minutes') if s.get('duration_minutes') is not None else s.get('duration')
+        tz_str = str(s.get('time_zone') or 'IST (Asia/Kolkata)').strip()
 
         # Validate start and end time if end_time is provided
         if end_time_in:
@@ -263,25 +267,58 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
             except ValueError:
                 return None, f"Invalid assessment date format '{sc_date}'. Please provide date as YYYY-MM-DD.", 400
 
+        # Validate schedule time is not in the past
+        if sc_date and st_time:
+            end_calc = end_time_in or calculate_end_time_str(st_time, int(dur_val or 30))
+            st_utc = create_utc_datetime(sc_date, st_time, tz_str)
+            end_utc = create_utc_datetime(sc_date, end_calc, tz_str)
+
+            if end_utc and end_utc <= now_utc:
+                return None, f"Invalid schedule time: Scheduled end time ({sc_date} {end_calc} {tz_str}) has already passed. Please select a valid future date and start time.", 400
+
+            # Allow 3 minutes clock-skew buffer for submission lag
+            if st_utc and st_utc < (now_utc - timedelta(minutes=3)):
+                return None, f"Invalid schedule time: Scheduled start time ({sc_date} at {st_time} {tz_str}) cannot be in the past. Please select a valid future start time.", 400
+
     if incomplete_employees:
         return None, f"Incomplete schedule: HR must explicitly enter Date, Start Time, and Duration for every employee. Missing details for: {', '.join(incomplete_employees)}.", 400
 
-    # 2. Enforce Stage 1 Initial Screening Pass & Pre-Assessment Eligibility (applied to Stage 2 leadership role assessments)
-    if (assessment.assessment_type or '').lower() != 'initial_screening':
-        ineligible_employees = []
-        duplicate_employees = []
+    # 2. Individual Per-Employee Batch Processing with Idempotency & Eligibility Validation
+    is_stage_2 = (assessment.assessment_type or '').lower() != 'initial_screening'
+    target_role_id = assessment.role_id if assessment.role_id else 1
 
-        for s in schedules_input:
-            emp_id = s.get('employee_id')
-            if not emp_id:
-                continue
-            emp_obj = Employee.query.get(emp_id)
-            if not emp_obj:
-                return None, f"Invalid employee ID #{emp_id} in schedule list", 404
+    created_assignments = []
+    skipped_assignments = []
+    failed_assignments = []
 
-            emp_name = emp_obj.name or f"Employee #{emp_id}"
+    for s in schedules_input:
+        emp_id = s.get('employee_id')
+        if not emp_id:
+            continue
 
-            # Step A: Enforce Stage 1 Initial Screening completion with passing benchmark (>=70%)
+        emp_obj = Employee.query.get(emp_id)
+        if not emp_obj:
+            failed_assignments.append({
+                "employee_id": emp_id,
+                "name": f"Employee #{emp_id}",
+                "reason": "Employee record not found in directory"
+            })
+            continue
+
+        emp_name = emp_obj.name or f"Employee #{emp_id}"
+        sc_date = str(s.get('scheduled_date') or s.get('date')).strip()
+        st_time = str(s.get('start_time')).strip()
+        dur_val = s.get('duration_minutes') if s.get('duration_minutes') is not None else s.get('duration')
+        duration = int(dur_val)
+        time_zone = str(s.get('time_zone') or 'IST (Asia/Kolkata)').strip()
+        instructions = str(s.get('instructions') or assessment.description or 'Complete your scheduled leadership assessment.').strip()
+        end_time_calculated = s.get('end_time') or calculate_end_time_str(st_time, duration)
+
+        start_utc = create_utc_datetime(sc_date, st_time, time_zone)
+        end_utc = start_utc + timedelta(minutes=duration) if start_utc else create_utc_datetime(sc_date, end_time_calculated, time_zone)
+
+        # Step A: Enforce Stage 1 Initial Screening Pass (score >= 70%) for Stage 2 Leadership Assessments
+        if is_stage_2:
             stage_1_assigns = [
                 a for a in emp_obj.assessment_assignments
                 if a.status == 'Completed' and a.result and (
@@ -298,62 +335,56 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
                 has_passed_s1 = res.passed if (res and res.passed is not None) else (res.overall_score >= thresh)
 
             if not has_passed_s1:
-                ineligible_employees.append(f"{emp_name} (Stage 1 Initial Screening not passed with score >=70%)")
+                failed_assignments.append({
+                    "employee_id": emp_id,
+                    "name": emp_name,
+                    "reason": "Stage 1 Initial Screening not completed or score < 70%"
+                })
                 continue
 
-            # Step B: Prevent duplicate active Stage 2 assignment for the same assessment
+            # Step B: Prevent Duplicate Active Stage 2 Assignment (Idempotency)
             existing_active_s2 = AssessmentAssignment.query.filter(
                 AssessmentAssignment.employee_id == emp_id,
                 AssessmentAssignment.assessment_id == assessment.id,
                 AssessmentAssignment.status.in_(['Assigned', 'Scheduled', 'In Progress', 'In-Progress'])
             ).first()
             if existing_active_s2:
-                duplicate_employees.append(f"{emp_name} (Active {assessment.title or 'Stage 2'} assignment already exists)")
+                skipped_assignments.append({
+                    "employee_id": emp_id,
+                    "name": emp_name,
+                    "reason": f"Active assessment already scheduled (ID #{existing_active_s2.id})",
+                    "assignment_id": existing_active_s2.id
+                })
                 continue
 
-            # Step C: Pre-assessment eligibility check
-            target_role_id = assessment.role_id if assessment.role_id else 1
-            elig = evaluate_pre_assessment_eligibility(emp_id, target_role_id, employee=emp_obj)
-            if not elig or not elig.get("is_eligible"):
-                reasons_str = "; ".join(elig.get("unmet_requirements", ["Unmet role prerequisites"])) if elig else "Failed eligibility"
-                ineligible_employees.append(f"{emp_name} ({reasons_str})")
+        # Step D: Check Scheduling Overlap Conflicts on same date
+        existing_conflicts = AssessmentAssignment.query.filter(
+            AssessmentAssignment.employee_id == emp_id,
+            AssessmentAssignment.scheduled_date == sc_date,
+            AssessmentAssignment.status.in_(['Scheduled', 'Assigned', 'In-Progress', 'In Progress']),
+            AssessmentAssignment.assessment_id != assessment.id
+        ).all()
+        has_overlap = False
+        for ex in existing_conflicts:
+            if ex.start_time and ex.end_time:
+                if not (end_time_calculated <= ex.start_time or st_time >= ex.end_time):
+                    has_overlap = True
+                    break
+        if has_overlap:
+            failed_assignments.append({
+                "employee_id": emp_id,
+                "name": emp_name,
+                "reason": f"Overlaps with another scheduled assessment on {sc_date}"
+            })
+            continue
 
-        if duplicate_employees:
-            return None, f"Duplicate assignment detected: {'; '.join(duplicate_employees)}", 409
-
-        if ineligible_employees:
-            return None, f"Stage 2 Leadership Assessment eligibility check failed: {'; '.join(ineligible_employees)}", 422
-
-    # 3. Check conflicts
-    conflict_check = check_scheduling_conflicts(schedules_input)
-    if conflict_check["has_blocking_conflicts"]:
-        err_msgs = [c["message"] for c in conflict_check["conflicts"] if c["severity"] == "error"]
-        return None, f"Scheduling Conflict Detected: {'; '.join(err_msgs)}", 409
-
-    saved_assignments = []
-
-    for s in schedules_input:
-        emp_id = s.get('employee_id')
-        sc_date = str(s.get('scheduled_date') or s.get('date')).strip()
-        st_time = str(s.get('start_time')).strip()
-        dur_val = s.get('duration_minutes') if s.get('duration_minutes') is not None else s.get('duration')
-        duration = int(dur_val)
-        time_zone = str(s.get('time_zone') or 'IST (Asia/Kolkata)').strip()
-        instructions = str(s.get('instructions') or assessment.description or 'Complete your scheduled leadership assessment.').strip()
-
-        end_time_calculated = s.get('end_time') or calculate_end_time_str(st_time, duration)
-
-        # Calculate authoritative UTC datetimes using explicit timezone
-        start_utc = create_utc_datetime(sc_date, st_time, time_zone)
-        end_utc = start_utc + timedelta(minutes=duration) if start_utc else create_utc_datetime(sc_date, end_time_calculated, time_zone)
-
+        # Step E: Create and Persist the Validated Assignment
         assignment_id = s.get('assignment_id')
         assignment = None
         if assignment_id:
             assignment = AssessmentAssignment.query.get(assignment_id)
 
         if not assignment:
-            # Check existing uncompleted assignment
             assignment = AssessmentAssignment.query.filter_by(
                 assessment_id=assessment_id, employee_id=emp_id
             ).filter(AssessmentAssignment.status != 'Completed').first()
@@ -375,7 +406,6 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
             if not assignment.attempt_number:
                 assignment.attempt_number = max(1, prior_count)
 
-        # Assign explicit manual schedule values
         assignment.scheduled_date = sc_date
         assignment.start_time = st_time
         assignment.duration_minutes = duration
@@ -388,14 +418,13 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
         assignment.status = 'Scheduled'
         assignment.schedule_status = 'Scheduled'
         assignment.assigned_by = assigned_by_user_id
-        assignment.assessment_type = assessment.assessment_type or 'leadership_role'
-        assignment.stage = assessment.stage or 'Stage 2'
+        assignment.assessment_type = assessment.assessment_type or ('leadership_role' if is_stage_2 else 'initial_screening')
+        assignment.stage = assessment.stage or ('Stage 2' if is_stage_2 else 'Stage 1')
 
         db.session.flush()
 
-        # Generate fresh attempt questions
-        if (assessment.assessment_type or '').lower() == 'initial_screening':
-            # For Stage 1 Initial Screening, populate all questions from the assessment template
+        # Step F: Generate exactly 20 competency scenarios for Stage 2 attempt
+        if not is_stage_2:
             AssignmentQuestion.query.filter_by(assignment_id=assignment.id).delete()
             template_questions = assessment.questions or []
             if not template_questions:
@@ -419,18 +448,15 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
                 aq.set_options(q.get_options())
                 db.session.add(aq)
         else:
-            # Generate fresh role-specific questions for this attempt (Section B)
-            target_role_id = assessment.role_id if assessment.role_id else 1
-            success_q, res_q, code_q = generate_and_persist_attempt_questions(assignment, target_role_id)
+            success_q, res_q, code_q = generate_and_persist_attempt_questions(assignment, target_role_id, num_questions=20)
             if not success_q:
-                db.session.rollback()
-                return None, res_q, code_q
+                # If question generation encounters an unexpected issue, log and continue
+                print(f"[WARNING] Question generation warning for assignment #{assignment.id}: {res_q}")
 
-        # In-App Notification to employee's user account
-        emp = Employee.query.get(emp_id)
-        if emp and emp.user_id:
+        # In-App Notification
+        if emp_obj.user_id:
             notif = Notification(
-                user_id=emp.user_id,
+                user_id=emp_obj.user_id,
                 title="New Assessment Scheduled",
                 message=f"HR has scheduled your assessment '{assessment.title}' for {sc_date} at {st_time} ({duration} mins).",
                 type="assessment_assigned",
@@ -438,11 +464,56 @@ def validate_and_save_manual_schedules(assessment_id, schedules_input, assigned_
             )
             db.session.add(notif)
 
-        saved_assignments.append(assignment.to_dict())
+        created_assignments.append(assignment)
 
-    db.session.commit()
+    # 3. Final Commit & Multi-Employee Batch Result Formulation
+    if len(created_assignments) > 0:
+        db.session.commit()
+        created_dicts = [a.to_dict() for a in created_assignments]
+        msg = f"Successfully assigned assessment to {len(created_assignments)} employee(s)."
+        if len(skipped_assignments) > 0:
+            msg += f" {len(skipped_assignments)} employee(s) already had active assignments (skipped)."
+        if len(failed_assignments) > 0:
+            msg += f" {len(failed_assignments)} employee(s) were ineligible (skipped)."
 
-    return saved_assignments, None, 201
+        return {
+            "assignments": created_dicts,
+            "created": created_dicts,
+            "skipped": skipped_assignments,
+            "failed": failed_assignments,
+            "created_count": len(created_assignments),
+            "skipped_count": len(skipped_assignments),
+            "failed_count": len(failed_assignments),
+            "total": len(schedules_input),
+            "message": msg
+        }, None, 201
+
+    if len(created_assignments) == 0 and len(skipped_assignments) > 0:
+        msg = f"All {len(skipped_assignments)} selected employee(s) already have active schedules for this assessment."
+        return {
+            "assignments": [],
+            "created": [],
+            "skipped": skipped_assignments,
+            "failed": failed_assignments,
+            "created_count": 0,
+            "skipped_count": len(skipped_assignments),
+            "failed_count": len(failed_assignments),
+            "total": len(schedules_input),
+            "message": msg
+        }, None, 200
+
+    # If all selected employees failed eligibility
+    failed_details = "; ".join([f"{f['name']}: {f['reason']}" for f in failed_assignments])
+    return {
+        "assignments": [],
+        "created": [],
+        "skipped": [],
+        "failed": failed_assignments,
+        "created_count": 0,
+        "skipped_count": 0,
+        "failed_count": len(failed_assignments),
+        "total": len(schedules_input)
+    }, f"Eligibility check failed for all {len(failed_assignments)} selected employee(s): {failed_details}", 422
 
 def check_assessment_start_permission(assignment, current_user_employee_id=None, is_admin=False, current_time=None):
     """

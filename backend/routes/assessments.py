@@ -1349,16 +1349,32 @@ def batch_save_schedules():
 
     saved, err, err_code = validate_and_save_manual_schedules(assessment_id, schedules, user.id)
     if err:
-        return jsonify({"success": False, "message": err}), err_code
+        return jsonify({
+            "success": False,
+            "message": err,
+            "data": saved if isinstance(saved, dict) else {}
+        }), err_code or 422
+
+    # Format structured response
+    if isinstance(saved, dict):
+        assignments_list = saved.get("assignments", [])
+        created_count = saved.get("created_count", len(assignments_list))
+        resp_data = saved
+        msg = saved.get("message") or f"Successfully assigned and saved schedules for {created_count} employee(s)."
+    else:
+        assignments_list = saved or []
+        created_count = len(assignments_list)
+        resp_data = {
+            "assignments": assignments_list,
+            "created_count": created_count
+        }
+        msg = f"Successfully assigned and saved schedules for {created_count} employee(s)."
 
     return jsonify({
         "success": True,
-        "data": {
-            "assignments": saved,
-            "created_count": len(saved)
-        },
-        "message": f"Successfully assigned and saved schedules for {len(saved)} employee(s)."
-    }), 201
+        "data": resp_data,
+        "message": msg
+    }), err_code or 201
 
 @assessments_bp.route('/assessment-schedules', methods=['GET'])
 def get_assessment_schedules():
